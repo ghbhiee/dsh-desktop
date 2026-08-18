@@ -59,8 +59,31 @@ function restartingHtml() {
   return pageShell('Restarting dsh', '<h1>Restarting dsh&hellip;</h1>');
 }
 
+function loadingHtml(message) {
+  return pageShell('dsh-desktop', `<h1>${escapeHtml(message)}</h1>`);
+}
+
+// Startup problems the user must fix (dsh missing, dsh too old): explain,
+// offer only Quit.
+function startupErrorHtml(title, message) {
+  return pageShell(
+    title,
+    `<h1>${escapeHtml(title)}</h1>
+     <pre>${escapeHtml(message)}</pre>
+     <p><a class="button secondary" href="${ACTION_SCHEME}quit">Quit</a></p>`
+  );
+}
+
 function toDataUrl(html) {
   return 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
 }
 
-module.exports = { backendDownHtml, restartingHtml, toDataUrl, escapeHtml, ACTION_SCHEME };
+module.exports = {
+  backendDownHtml,
+  restartingHtml,
+  loadingHtml,
+  startupErrorHtml,
+  toDataUrl,
+  escapeHtml,
+  ACTION_SCHEME,
+};

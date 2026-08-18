@@ -36,14 +36,19 @@ async function clearGreetingDialogs(win) {
 // Launch the real app. `env` merges over the parent environment;
 // DSH_DESKTOP_E2E=1 makes the app record external-link opens instead of
 // opening a real browser.
-async function launchApp({ env = {}, toUi = true } = {}) {
+async function launchApp({ env = {}, toUi = true, uiTimeout = 90_000 } = {}) {
   const app = await _electron.launch({
     args: ['.'],
     env: { ...process.env, DSH_DESKTOP_E2E: '1', ...env },
   });
   const win = await app.firstWindow();
   await win.waitForLoadState('domcontentloaded');
-  if (toUi) await clearGreetingDialogs(win);
+  if (toUi) {
+    // The window starts on a data: loading page (profile assembly, plugin
+    // installs) and navigates to dsh's loopback URL when the backend is up.
+    await win.waitForURL(/^http:\/\/127\.0\.0\.1:\d+\//, { timeout: uiTimeout });
+    await clearGreetingDialogs(win);
+  }
   return { app, win };
 }
 
