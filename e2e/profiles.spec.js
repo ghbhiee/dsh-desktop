@@ -4,7 +4,9 @@ const { test, expect } = require('@playwright/test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { dshPids, clearGreetingDialogs, launchApp } = require('./helpers');
+const { dshPids, clearGreetingDialogs, launchApp, cleanupLaunched } = require('./helpers');
+
+test.afterEach(cleanupLaunched);
 
 // M3 checks, mechanically: a wrong dsh path yields an explanation (not a
 // blank window), and a fresh profile directory ends with the workbench panel

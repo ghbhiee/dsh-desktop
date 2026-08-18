@@ -2,10 +2,12 @@
 
 const { test, expect } = require('@playwright/test');
 const { execFileSync } = require('node:child_process');
-const { dshPids, clearGreetingDialogs, launchApp } = require('./helpers');
+const { dshPids, clearGreetingDialogs, launchApp, cleanupLaunched } = require('./helpers');
 
 // Drives the real app: Electron main process, spawned dsh, real profile.
 // These are the mechanical forms of the M0/M1 checks — no human eyeballs.
+
+test.afterEach(cleanupLaunched);
 
 test('M0: dsh UI loads, a session renders, workbench opens, clean exit', async () => {
   const { app, win } = await launchApp();

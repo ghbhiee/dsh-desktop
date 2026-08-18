@@ -1,11 +1,13 @@
 'use strict';
 
 const { test, expect } = require('@playwright/test');
-const { launchApp } = require('./helpers');
+const { launchApp, cleanupLaunched } = require('./helpers');
 
 // M2 checks, mechanically: geometry survives a restart, the Edit menu exists
 // with working accelerators, and off-origin navigation goes to the system
 // browser (recorded, in e2e mode, instead of actually opening one).
+
+test.afterEach(cleanupLaunched);
 
 test('M2: window geometry survives a restart', async () => {
   const first = await launchApp({ toUi: false });

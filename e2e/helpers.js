@@ -36,11 +36,32 @@ async function clearGreetingDialogs(win) {
 // Launch the real app. `env` merges over the parent environment;
 // DSH_DESKTOP_E2E=1 makes the app record external-link opens instead of
 // opening a real browser.
+// Every app launched in a test, so a failed assertion cannot leak it: when a
+// test dies before its own close(), Playwright hard-kills the Electron
+// process, before-quit never runs, and the dsh child would outlive the run —
+// poisoning every later pid assertion. Specs register cleanupLaunched as an
+// afterEach.
+const launched = [];
+
+async function cleanupLaunched() {
+  while (launched.length > 0) {
+    await launched.pop().close().catch(() => {});
+  }
+  // Belt and braces: a child that survived anyway is killed so one failure
+  // cannot cascade — each test's own asserts have already run by now.
+  for (const pid of dshPids()) {
+    try {
+      process.kill(Number(pid), 'SIGTERM');
+    } catch {}
+  }
+}
+
 async function launchApp({ env = {}, toUi = true, uiTimeout = 90_000 } = {}) {
   const app = await _electron.launch({
     args: ['.'],
     env: { ...process.env, DSH_DESKTOP_E2E: '1', ...env },
   });
+  launched.push(app);
   const win = await app.firstWindow();
   await win.waitForLoadState('domcontentloaded');
   if (toUi) {
@@ -52,4 +73,4 @@ async function launchApp({ env = {}, toUi = true, uiTimeout = 90_000 } = {}) {
   return { app, win };
 }
 
-module.exports = { dshPids, clearGreetingDialogs, launchApp };
+module.exports = { dshPids, clearGreetingDialogs, launchApp, cleanupLaunched };

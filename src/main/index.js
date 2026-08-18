@@ -62,9 +62,11 @@ function main() {
   app.on('window-all-closed', () => app.quit());
   app.on('before-quit', (event) => {
     if (quitting) return;
+    // The flag flips on the first quit no matter how far startup got: any
+    // still-pending async startup step checks it before spawning.
+    quitting = true;
     if (dsh && dsh.running) {
       event.preventDefault();
-      quitting = true;
       dsh.stop().then(() => app.quit());
     }
   });
@@ -134,6 +136,7 @@ async function startUp() {
     );
   }
 
+  if (quitting) return;
   ensureProfile(profileDir);
   if (missingPlugins(profileDir).length > 0) {
     const results = await installMissingPlugins({
@@ -153,9 +156,10 @@ async function startUp() {
     ensureProfile(profileDir, { pluginNames: installedPlugins(profileDir).map((p) => p.name) });
   }
 
+  if (quitting) return;
   showPage(loadingHtml('Starting dsh…'));
   const url = await spawnDsh();
-  navigateToDsh(url);
+  if (!quitting) navigateToDsh(url);
 }
 
 function dshVersion(bin, env) {
@@ -167,8 +171,11 @@ function dshVersion(bin, env) {
   });
 }
 
-// Spawns dsh and resolves with the URL it announces.
+// Spawns dsh and resolves with the URL it announces. Refuses to spawn into a
+// quit already in progress — an async startup step resuming after
+// before-quit ran must not orphan a fresh child.
 function spawnDsh() {
+  if (quitting) return Promise.reject(new Error('quit in progress'));
   const { profileName, profileDir, env } = backendPaths();
   ensureProfile(profileDir);
 
