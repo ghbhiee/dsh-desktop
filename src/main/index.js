@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, Menu, shell } = require('electron');
 const path = require('node:path');
 
 const { ensureProfile } = require('./profile');
@@ -8,11 +8,23 @@ const { buildDshEnv } = require('./dsh-env');
 const { resolveDshBin } = require('./dsh-bin');
 const { DshProcess } = require('./dsh-process');
 const { backendDownHtml, restartingHtml, toDataUrl, ACTION_SCHEME } = require('./error-page');
+const { buildMenuTemplate } = require('./menu');
+const { loadWindowState, trackWindowState } = require('./window-state');
 
 const URL_TIMEOUT_MS = 45_000;
 // Smoke mode: launch, wait for the dsh UI to load, print a verdict, quit.
 // Exists so a session can verify "the window shows dsh" without a human.
 const SMOKE = process.env.DSH_DESKTOP_SMOKE === '1';
+// e2e mode records external-link opens instead of launching a real browser.
+const E2E = process.env.DSH_DESKTOP_E2E === '1';
+
+function openExternal(url) {
+  if (E2E) {
+    (global.__externalOpens ??= []).push(url);
+    return;
+  }
+  shell.openExternal(url);
+}
 
 let mainWindow = null;
 let dsh = null;
@@ -66,6 +78,7 @@ async function startUp() {
       )
     );
   }
+  Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate({ openExternal })));
   const url = await spawnDsh();
   createWindow(url);
 }
@@ -147,9 +160,9 @@ async function retryBackend() {
 
 function createWindow(url) {
   dshOrigin = new URL(url).origin;
+  const stateDir = app.getPath('userData');
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    ...loadWindowState(stateDir),
     webPreferences: {
       // The renderer is dsh's web app plus every plugin's client bundle;
       // none of them get Node. Anything needing privilege belongs in this
@@ -159,9 +172,10 @@ function createWindow(url) {
       sandbox: true,
     },
   });
+  trackWindowState(mainWindow, stateDir);
 
   mainWindow.webContents.setWindowOpenHandler(({ url: target }) => {
-    if (isExternal(target)) shell.openExternal(target);
+    if (isExternal(target)) openExternal(target);
     return { action: 'deny' };
   });
   mainWindow.webContents.on('will-navigate', (event, target) => {
@@ -175,7 +189,7 @@ function createWindow(url) {
     }
     if (isExternal(target)) {
       event.preventDefault();
-      shell.openExternal(target);
+      openExternal(target);
     }
   });
 

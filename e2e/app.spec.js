@@ -1,51 +1,14 @@
 'use strict';
 
-const { test, expect, _electron } = require('@playwright/test');
-const { execSync, execFileSync } = require('node:child_process');
+const { test, expect } = require('@playwright/test');
+const { execFileSync } = require('node:child_process');
+const { dshPids, clearGreetingDialogs, launchApp } = require('./helpers');
 
 // Drives the real app: Electron main process, spawned dsh, real profile.
 // These are the mechanical forms of the M0/M1 checks — no human eyeballs.
 
-function dshPids() {
-  try {
-    return execSync('pgrep -f -- "--profile desktop"', { encoding: 'utf8' })
-      .trim()
-      .split('\n')
-      .filter(Boolean);
-  } catch {
-    return []; // pgrep exits 1 when nothing matches
-  }
-}
-
-// A fresh-origin launch greets with up to two modals: the testing notice,
-// then the API-key onboarding dialog. Both are optional (the OS assigns a new
-// port per run, so origin-keyed localStorage decides), both must be cleared
-// before the UI takes clicks.
-async function clearGreetingDialogs(win) {
-  const notice = win.getByText('Internal Testing Notice');
-  try {
-    await notice.waitFor({ state: 'visible', timeout: 8000 });
-    await win.getByText('Continue', { exact: true }).click();
-    await notice.waitFor({ state: 'hidden', timeout: 5000 });
-  } catch {}
-  const apiKeyDialog = win.getByRole('dialog', { name: /add an api key/i });
-  try {
-    await apiKeyDialog.waitFor({ state: 'visible', timeout: 5000 });
-    await win.getByRole('button', { name: 'Configure later' }).click();
-    await apiKeyDialog.waitFor({ state: 'hidden', timeout: 5000 });
-  } catch {}
-}
-
-async function launchToUi() {
-  const app = await _electron.launch({ args: ['.'] });
-  const win = await app.firstWindow();
-  await win.waitForLoadState('domcontentloaded');
-  await clearGreetingDialogs(win);
-  return { app, win };
-}
-
 test('M0: dsh UI loads, a session renders, workbench opens, clean exit', async () => {
-  const { app, win } = await launchToUi();
+  const { app, win } = await launchApp();
 
   expect(win.url()).toMatch(/^http:\/\/127\.0\.0\.1:\d+\//);
 
@@ -68,7 +31,7 @@ test('M0: dsh UI loads, a session renders, workbench opens, clean exit', async (
 });
 
 test('M1: a killed dsh yields an in-window error page, and Retry recovers', async () => {
-  const { app, win } = await launchToUi();
+  const { app, win } = await launchApp();
 
   const pids = dshPids();
   expect(pids.length).toBe(1);
@@ -90,7 +53,7 @@ test('M1: a killed dsh yields an in-window error page, and Retry recovers', asyn
 });
 
 test('M1: a second launch defers to the first — one window, one child', async () => {
-  const { app, win } = await launchToUi();
+  const { app, win } = await launchApp();
 
   // The second instance should exit on its own (single-instance lock).
   execFileSync('node_modules/.bin/electron', ['.'], { timeout: 30_000, stdio: 'ignore' });
