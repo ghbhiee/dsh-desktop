@@ -5,13 +5,31 @@
   "private": true,
   "license": "MIT",
   "main": "src/main/index.js",
+  "author": "ghbhiee <guohongbo@outlook.com>",
   "scripts": {
     "start": "electron .",
     "test": "node --test",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "pack": "electron-builder --mac dir --arm64",
+    "dist": "electron-builder --mac dmg --arm64"
+  },
+  "build": {
+    "appId": "com.tokencv.dsh-desktop",
+    "productName": "dsh Desktop",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools"
+    }
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
-    "electron": "^43.4.0"
+    "electron": "^43.4.0",
+    "electron-builder": "^26.15.3"
   }
 }

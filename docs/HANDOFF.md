@@ -118,6 +118,14 @@ bound to the public hostname (`ds.tokencv.com`).
 
 **Therefore the first question mode C must answer, before any UI work: can
 Electron complete a WebAuthn ceremony with a platform authenticator (Touch ID)?**
+
+> **Answered 2026-08-18** with a throwaway hidden BrowserWindow (sandboxed,
+> context-isolated) loading `https://ds.tokencv.com/` (redirects to `/auth`):
+> `PublicKeyCredential` exists, but
+> `isUserVerifyingPlatformAuthenticatorAvailable()` returns **false** —
+> Electron has no macOS platform authenticator, so the Touch ID ceremony
+> cannot happen in-app. Mode C requires one of the options below; picking one
+> is the user's call since (1) and (2) are gateway-repo changes.
 Electron's support here has historically been limited and version-dependent.
 Verify it with a throwaway BrowserWindow against the real gateway before
 designing anything else. If it does not work, the options are, in order of
