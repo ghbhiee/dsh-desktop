@@ -5,40 +5,73 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { ensureProfile, BASE_BUNDLES } = require('../src/main/profile');
+const { ensureProfile, BASE_BUNDLES, DEFAULT_PATCH } = require('../src/main/profile');
 
 function tmpProfileDir() {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dshd-test-')), 'desktop');
 }
 
+function readPkg(dir) {
+  return JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+}
+
 test('creates the three profile files plus node_modules', () => {
   const dir = ensureProfile(tmpProfileDir());
-  const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
-  assert.deepEqual(pkg.dsh.profile.bundles, BASE_BUNDLES);
+  assert.deepEqual(readPkg(dir).dsh.profile.bundles, BASE_BUNDLES);
   assert.equal(fs.readFileSync(path.join(dir, 'cordis.yml'), 'utf8'), '[]\n');
-  assert.equal(fs.readFileSync(path.join(dir, 'cordis.patch.yml'), 'utf8'), '[]\n');
+  assert.equal(fs.readFileSync(path.join(dir, 'cordis.patch.yml'), 'utf8'), DEFAULT_PATCH);
   assert.ok(fs.statSync(path.join(dir, 'node_modules')).isDirectory());
 });
 
 test('plugin names land in bundles after the base stack', () => {
   const dir = ensureProfile(tmpProfileDir(), { pluginNames: ['dsh-plugin-workbench'] });
-  const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
-  assert.deepEqual(pkg.dsh.profile.bundles, [...BASE_BUNDLES, 'dsh-plugin-workbench']);
+  assert.deepEqual(readPkg(dir).dsh.profile.bundles, [...BASE_BUNDLES, 'dsh-plugin-workbench']);
 });
 
-test('never clobbers an existing cordis.patch.yml', () => {
+test('preserves dependencies and bundles written by dsh plugin add', () => {
+  const dir = ensureProfile(tmpProfileDir());
+  const pkgFile = path.join(dir, 'package.json');
+  const pkg = readPkg(dir);
+  pkg.dependencies = { 'dsh-plugin-workbench': 'github:ghbhiee/dsh-plugin-workbench' };
+  pkg.dsh.profile.bundles.push('dsh-plugin-workbench');
+  fs.writeFileSync(pkgFile, JSON.stringify(pkg, null, 2));
+
+  ensureProfile(dir);
+  const after = readPkg(dir);
+  assert.equal(after.dependencies['dsh-plugin-workbench'], 'github:ghbhiee/dsh-plugin-workbench');
+  assert.ok(after.dsh.profile.bundles.includes('dsh-plugin-workbench'));
+});
+
+test('bundle union keeps base bundles first and drops duplicates', () => {
+  const dir = ensureProfile(tmpProfileDir(), { pluginNames: ['dsh-plugin-snake'] });
+  ensureProfile(dir, { pluginNames: ['dsh-plugin-snake', 'dsh-plugin-workbench'] });
+  assert.deepEqual(readPkg(dir).dsh.profile.bundles, [
+    ...BASE_BUNDLES,
+    'dsh-plugin-snake',
+    'dsh-plugin-workbench',
+  ]);
+});
+
+test('never clobbers a cordis.patch.yml with real content', () => {
   const dir = tmpProfileDir();
   ensureProfile(dir);
   const patchFile = path.join(dir, 'cordis.patch.yml');
-  fs.writeFileSync(patchFile, '- id: workbench\n  config:\n    ptyEnabled: true\n');
+  fs.writeFileSync(patchFile, '- id: workbench\n  config:\n    writeEnabled: true\n');
   ensureProfile(dir);
-  assert.match(fs.readFileSync(patchFile, 'utf8'), /ptyEnabled: true/);
+  assert.match(fs.readFileSync(patchFile, 'utf8'), /writeEnabled: true/);
 });
 
-test('rewrites package.json to keep bundles in sync', () => {
+test('upgrades a patch file that is still the empty list', () => {
+  const dir = tmpProfileDir();
+  ensureProfile(dir, { defaultPatch: '[]\n' });
+  ensureProfile(dir);
+  assert.equal(fs.readFileSync(path.join(dir, 'cordis.patch.yml'), 'utf8'), DEFAULT_PATCH);
+});
+
+test('recovers from a corrupt profile package.json', () => {
   const dir = tmpProfileDir();
   ensureProfile(dir);
-  ensureProfile(dir, { pluginNames: ['dsh-plugin-snake'] });
-  const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
-  assert.ok(pkg.dsh.profile.bundles.includes('dsh-plugin-snake'));
+  fs.writeFileSync(path.join(dir, 'package.json'), '{not json');
+  ensureProfile(dir);
+  assert.deepEqual(readPkg(dir).dsh.profile.bundles, BASE_BUNDLES);
 });
