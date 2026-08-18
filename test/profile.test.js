@@ -5,7 +5,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { ensureProfile, BASE_BUNDLES, DEFAULT_PATCH } = require('../src/main/profile');
+const {
+  ensureProfile,
+  copyTemplateNodeModules,
+  BASE_BUNDLES,
+  DEFAULT_PATCH,
+} = require('../src/main/profile');
 
 function tmpProfileDir() {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dshd-test-')), 'desktop');
@@ -66,6 +71,26 @@ test('upgrades a patch file that is still the empty list', () => {
   ensureProfile(dir, { defaultPatch: '[]\n' });
   ensureProfile(dir);
   assert.equal(fs.readFileSync(path.join(dir, 'cordis.patch.yml'), 'utf8'), DEFAULT_PATCH);
+});
+
+test('template node_modules copy overwrites plugins, spares the patch file', () => {
+  const template = fs.mkdtempSync(path.join(os.tmpdir(), 'dshd-tpl-'));
+  const pluginDir = path.join(template, 'node_modules', 'dsh-plugin-x');
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.writeFileSync(path.join(pluginDir, 'package.json'), '{"name":"dsh-plugin-x"}');
+
+  const dir = ensureProfile(tmpProfileDir());
+  const patchFile = path.join(dir, 'cordis.patch.yml');
+  fs.writeFileSync(patchFile, '- id: mine\n');
+
+  assert.equal(copyTemplateNodeModules(template, dir), true);
+  assert.ok(fs.existsSync(path.join(dir, 'node_modules', 'dsh-plugin-x', 'package.json')));
+  assert.equal(fs.readFileSync(patchFile, 'utf8'), '- id: mine\n');
+});
+
+test('a template without node_modules is a no-op, not an error', () => {
+  const dir = ensureProfile(tmpProfileDir());
+  assert.equal(copyTemplateNodeModules('/no/such/template', dir), false);
 });
 
 test('recovers from a corrupt profile package.json', () => {

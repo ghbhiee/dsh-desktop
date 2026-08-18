@@ -10,8 +10,9 @@
     "start": "electron .",
     "test": "node --test",
     "e2e": "playwright test",
-    "pack": "electron-builder --mac dir --arm64",
-    "dist": "electron-builder --mac dmg --arm64"
+    "bundle": "node bin/prepare-bundle.js",
+    "pack": "npm run bundle && electron-builder --mac dir --arm64",
+    "dist": "npm run bundle && electron-builder --mac dmg --arm64"
   },
   "build": {
     "appId": "com.tokencv.dsh-desktop",
@@ -23,6 +24,7 @@
       "src/**/*",
       "package.json"
     ],
+    "afterPack": "bin/after-pack.js",
     "mac": {
       "category": "public.app-category.developer-tools"
     }

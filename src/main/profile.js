@@ -57,4 +57,15 @@ function ensureProfile(profileDir, { pluginNames = [], defaultPatch = DEFAULT_PA
   return profileDir;
 }
 
-module.exports = { ensureProfile, BASE_BUNDLES, DEFAULT_PATCH };
+// Mode A: the packaged app ships a pre-populated profile template
+// (assembled at build time with real, symlink-free node_modules). Plugins
+// arrive by copying the template's node_modules over — never touching
+// cordis.patch.yml, which ensureProfile already protects.
+function copyTemplateNodeModules(templateDir, profileDir) {
+  const from = path.join(templateDir, 'node_modules');
+  if (!fs.existsSync(from)) return false;
+  fs.cpSync(from, path.join(profileDir, 'node_modules'), { recursive: true, force: true });
+  return true;
+}
+
+module.exports = { ensureProfile, copyTemplateNodeModules, BASE_BUNDLES, DEFAULT_PATCH };

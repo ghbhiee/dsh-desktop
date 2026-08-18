@@ -4,9 +4,10 @@ const { app, BrowserWindow, Menu, shell } = require('electron');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 
-const { ensureProfile } = require('./profile');
+const { ensureProfile, copyTemplateNodeModules } = require('./profile');
 const { buildDshEnv } = require('./dsh-env');
-const { resolveDshBin } = require('./dsh-bin');
+const { resolveDshRuntime } = require('./dsh-bin');
+const { dshInvocation } = require('./dsh-command');
 const { DshProcess } = require('./dsh-process');
 const { installMissingPlugins, installedPlugins, missingPlugins } = require('./plugins');
 const { isSupportedDshVersion, MIN_DSH_VERSION } = require('./version');
@@ -30,7 +31,7 @@ const E2E = process.env.DSH_DESKTOP_E2E === '1';
 
 let mainWindow = null;
 let dsh = null;
-let dshBin = null;
+let dshRuntime = null;
 let dshOrigin = null;
 let quitting = false;
 
@@ -105,8 +106,11 @@ async function startUp() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate({ openExternal })));
   createShellWindow();
 
-  dshBin = resolveDshBin({ override: process.env.DSH_DESKTOP_DSH_BIN });
-  if (!dshBin) {
+  dshRuntime = resolveDshRuntime({
+    override: process.env.DSH_DESKTOP_DSH_BIN,
+    bundledDir: process.env.DSH_DESKTOP_BUNDLED_DIR || process.resourcesPath,
+  });
+  if (!dshRuntime) {
     return startupError(
       'dsh not found',
       'No dsh binary at /opt/homebrew/bin/dsh or /usr/local/bin/dsh' +
@@ -118,20 +122,21 @@ async function startUp() {
   }
 
   const { profileName, profileDir, env } = backendPaths();
+  const dshName = dshRuntime.bin || 'bundled dsh';
 
   let version;
   try {
-    version = await dshVersion(dshBin, env);
+    version = await dshVersion(dshRuntime, env);
   } catch (err) {
     return startupError('dsh failed to run', String(err?.message || err));
   }
   if (version === null) {
-    return startupError('dsh failed to run', `${dshBin} --version produced no version.`);
+    return startupError('dsh failed to run', `${dshName} --version produced no version.`);
   }
   if (!isSupportedDshVersion(version)) {
     return startupError(
       'dsh too old',
-      `This app needs dsh ${MIN_DSH_VERSION} or newer; ${dshBin} is ${version}.\n` +
+      `This app needs dsh ${MIN_DSH_VERSION} or newer; ${dshName} is ${version}.\n` +
         'Upgrade with: npm install -g @deepseek-ai/dsh@latest'
     );
   }
@@ -139,20 +144,27 @@ async function startUp() {
   if (quitting) return;
   ensureProfile(profileDir);
   if (missingPlugins(profileDir).length > 0) {
-    const results = await installMissingPlugins({
-      dshBin,
-      env,
-      profileName,
-      profileDir,
-      onProgress: (message) => showPage(loadingHtml(message)),
-    });
-    for (const result of results.filter((r) => !r.ok)) {
-      // Boot proceeds with whatever installed; a missing plugin degrades the
-      // UI, it does not brick it.
-      console.warn(`plugin install failed for ${result.spec}:\n${result.error}`);
+    if (dshRuntime.type === 'bundled') {
+      // Mode A machines have neither pnpm nor network guarantees: plugins
+      // arrive by copying the pre-populated template shipped in resources.
+      showPage(loadingHtml('Setting up plugins…'));
+      copyTemplateNodeModules(dshRuntime.templateDir, profileDir);
+    } else {
+      const results = await installMissingPlugins({
+        dshBin: dshRuntime.bin,
+        env,
+        profileName,
+        profileDir,
+        onProgress: (message) => showPage(loadingHtml(message)),
+      });
+      for (const result of results.filter((r) => !r.ok)) {
+        // Boot proceeds with whatever installed; a missing plugin degrades
+        // the UI, it does not brick it.
+        console.warn(`plugin install failed for ${result.spec}:\n${result.error}`);
+      }
     }
     // Self-heal bundles for anything present but not yet listed (an earlier
-    // interrupted install, a hand-copied plugin).
+    // interrupted install, a hand-copied plugin, the template copy above).
     ensureProfile(profileDir, { pluginNames: installedPlugins(profileDir).map((p) => p.name) });
   }
 
@@ -162,10 +174,11 @@ async function startUp() {
   if (!quitting) navigateToDsh(url);
 }
 
-function dshVersion(bin, env) {
+function dshVersion(runtime, env) {
+  const inv = dshInvocation(runtime, ['--version'], { baseEnv: env });
   return new Promise((resolve, reject) => {
-    execFile(bin, ['--version'], { env, timeout: 15_000 }, (err, stdout) => {
-      if (err) reject(new Error(`${bin} --version failed: ${err.message}`));
+    execFile(inv.command, inv.args, { env: inv.env, timeout: 15_000 }, (err, stdout) => {
+      if (err) reject(new Error(`dsh --version failed: ${err.message}`));
       else resolve(stdout.trim() || null);
     });
   });
@@ -179,11 +192,12 @@ function spawnDsh() {
   const { profileName, profileDir, env } = backendPaths();
   ensureProfile(profileDir);
 
-  dsh = new DshProcess({
-    command: dshBin,
-    args: ['--profile', profileName, '--host', '127.0.0.1', '--port', '0'],
-    env,
-  });
+  const inv = dshInvocation(
+    dshRuntime,
+    ['--profile', profileName, '--host', '127.0.0.1', '--port', '0'],
+    { baseEnv: env }
+  );
+  dsh = new DshProcess({ command: inv.command, args: inv.args, env: inv.env });
 
   const urlPromise = new Promise((resolve, reject) => {
     const timer = setTimeout(() => {

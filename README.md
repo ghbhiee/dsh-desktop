@@ -15,14 +15,21 @@ Three deployment modes, same window:
 All the plugins are supported — a plugin here commits its built `lib/`, so a
 profile can be assembled by copying directories, with no pnpm and no network.
 
-**Status: mode B works.** The app spawns the machine's dsh on its own port
-under an app-owned `DSH_HOME`, assembles its `desktop` profile itself
-(installing workbench, mobile-shell and snake via `dsh plugin add`), survives
-backend death with an in-window retry, and never leaves a stray process —
-all verified by `npm test` (pure-module unit tests) and `npm run e2e`
-(Playwright driving the real app). The build brief is
-[`docs/HANDOFF.md`](docs/HANDOFF.md) — read it first; it records what has
-already been verified on this machine and the fences not to trip.
+**Status: modes A and B work.** The app spawns dsh on its own port under an
+app-owned `DSH_HOME`, assembles its `desktop` profile itself, survives
+backend death with an in-window retry, and never leaves a stray process.
+Packaged builds (`npm run pack` / `npm run dist`, arm64) ship dsh inside —
+run on Electron's own Node via `ELECTRON_RUN_AS_NODE` — plus a pre-populated
+profile template, so a machine with no dsh and no pnpm gets a working
+terminal out of the box (~600 MB .app, as the brief predicted). Dev installs
+plugins via `dsh plugin add` (local clones as `link:`, else `github:`).
+All of it is verified by `npm test` (pure-module unit tests) and
+`npm run e2e` (Playwright driving the real app, including the packaged one).
+Mode C (remote via the passkey gateway) is blocked on a design decision:
+Electron exposes no macOS platform authenticator, so Touch ID cannot happen
+in-app — see the brief. The build brief is [`docs/HANDOFF.md`](docs/HANDOFF.md)
+— read it first; it records what has already been verified on this machine
+and the fences not to trip.
 
 Sibling projects: [dsh-plugin-workbench](https://github.com/ghbhiee/dsh-plugin-workbench),
 [dsh-plugin-mobile-shell](https://github.com/ghbhiee/dsh-plugin-mobile-shell),
