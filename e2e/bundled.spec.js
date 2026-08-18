@@ -103,6 +103,10 @@ test('M4: the packaged .app is self-contained — terminal works with no dsh, no
       LOGNAME: process.env.LOGNAME || process.env.USER,
       TMPDIR: os.tmpdir() + '/',
       DSH_DESKTOP_HOME: path.join(freshHome, 'dsh-home'),
+      // macOS resolves Application Support via the directory service, not
+      // $HOME — without an explicit userData the packaged app would contend
+      // for the real instance's single-instance lock.
+      DSH_DESKTOP_USERDATA: path.join(freshHome, 'userdata'),
       DSH_DESKTOP_E2E: '1',
       PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
     },

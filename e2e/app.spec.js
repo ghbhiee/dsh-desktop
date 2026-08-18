@@ -2,7 +2,7 @@
 
 const { test, expect } = require('@playwright/test');
 const { execFileSync } = require('node:child_process');
-const { dshPids, clearGreetingDialogs, launchApp, cleanupLaunched } = require('./helpers');
+const { dshPids, clearGreetingDialogs, launchApp, cleanupLaunched, E2E_USERDATA } = require('./helpers');
 
 // Drives the real app: Electron main process, spawned dsh, real profile.
 // These are the mechanical forms of the M0/M1 checks — no human eyeballs.
@@ -57,8 +57,13 @@ test('M1: a killed dsh yields an in-window error page, and Retry recovers', asyn
 test('M1: a second launch defers to the first — one window, one child', async () => {
   const { app, win } = await launchApp();
 
-  // The second instance should exit on its own (single-instance lock).
-  execFileSync('node_modules/.bin/electron', ['.'], { timeout: 30_000, stdio: 'ignore' });
+  // The second instance must contend for OUR lock (same userData), not the
+  // lock of whatever real instance the user may have open.
+  execFileSync('node_modules/.bin/electron', ['.'], {
+    timeout: 30_000,
+    stdio: 'ignore',
+    env: { ...process.env, DSH_DESKTOP_E2E: '1', DSH_DESKTOP_USERDATA: E2E_USERDATA },
+  });
 
   expect(dshPids().length).toBe(1);
   expect(win.isClosed()).toBe(false);

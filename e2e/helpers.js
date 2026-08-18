@@ -2,16 +2,37 @@
 
 const { _electron } = require('@playwright/test');
 const { execSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
+// One isolated userData per test run: its own single-instance lock, window
+// state and default DSH_HOME. Without this, e2e collides with a packaged
+// app the user has open — the lock makes launches exit instantly, and pid
+// sweeps would count (or kill!) the user's own dsh.
+const E2E_USERDATA = fs.mkdtempSync(path.join(os.tmpdir(), 'dshd-e2e-userdata-'));
+
+// Only processes carrying the e2e env marker are ours to count or reap. The
+// user's real instance never has it.
 function dshPids() {
+  let candidates;
   try {
-    return execSync('pgrep -f -- "--profile desktop"', { encoding: 'utf8' })
+    candidates = execSync('pgrep -f -- "--profile desktop"', { encoding: 'utf8' })
       .trim()
       .split('\n')
       .filter(Boolean);
   } catch {
     return []; // pgrep exits 1 when nothing matches
   }
+  return candidates.filter((pid) => {
+    try {
+      return execSync(`ps eww -o command= -p ${pid}`, { encoding: 'utf8' }).includes(
+        'DSH_DESKTOP_E2E=1'
+      );
+    } catch {
+      return false; // already gone
+    }
+  });
 }
 
 // A fresh-origin launch greets with up to two modals: the testing notice,
@@ -59,7 +80,12 @@ async function cleanupLaunched() {
 async function launchApp({ env = {}, toUi = true, uiTimeout = 90_000 } = {}) {
   const app = await _electron.launch({
     args: ['.'],
-    env: { ...process.env, DSH_DESKTOP_E2E: '1', ...env },
+    env: {
+      ...process.env,
+      DSH_DESKTOP_E2E: '1',
+      DSH_DESKTOP_USERDATA: E2E_USERDATA,
+      ...env,
+    },
   });
   launched.push(app);
   const win = await app.firstWindow();
@@ -73,4 +99,4 @@ async function launchApp({ env = {}, toUi = true, uiTimeout = 90_000 } = {}) {
   return { app, win };
 }
 
-module.exports = { dshPids, clearGreetingDialogs, launchApp, cleanupLaunched };
+module.exports = { dshPids, clearGreetingDialogs, launchApp, cleanupLaunched, E2E_USERDATA };

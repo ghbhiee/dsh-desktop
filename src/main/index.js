@@ -10,6 +10,7 @@ const { resolveDshRuntime } = require('./dsh-bin');
 const { dshInvocation } = require('./dsh-command');
 const { DshProcess } = require('./dsh-process');
 const { installMissingPlugins, installedPlugins, missingPlugins } = require('./plugins');
+const { registerPluginManager, openPluginManagerWindow } = require('./plugin-manager');
 const { isSupportedDshVersion, MIN_DSH_VERSION } = require('./version');
 const {
   backendDownHtml,
@@ -42,6 +43,13 @@ function openExternal(url) {
     return;
   }
   shell.openExternal(url);
+}
+
+// An alternate userData relocates everything derived from it — the
+// single-instance lock, window state, and the default DSH_HOME — so tests
+// (and any parallel deployment) can coexist with a running instance.
+if (process.env.DSH_DESKTOP_USERDATA) {
+  app.setPath('userData', process.env.DSH_DESKTOP_USERDATA);
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -104,7 +112,20 @@ function backendPaths() {
 }
 
 async function startUp() {
-  Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate({ openExternal })));
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(
+      buildMenuTemplate({
+        openExternal,
+        onManagePlugins: () => openPluginManagerWindow(mainWindow),
+        onRestartBackend: () => restartBackend(),
+      })
+    )
+  );
+  registerPluginManager(() => ({
+    runtime: dshRuntime,
+    ...backendPaths(),
+    restartBackend,
+  }));
   createShellWindow();
 
   dshRuntime = resolveDshRuntime({
@@ -152,7 +173,7 @@ async function startUp() {
       copyTemplateNodeModules(dshRuntime.templateDir, profileDir);
     } else {
       const results = await installMissingPlugins({
-        dshBin: dshRuntime.bin,
+        runtime: dshRuntime,
         env,
         profileName,
         profileDir,
@@ -286,11 +307,34 @@ async function retryBackend() {
   }
 }
 
+// Graceful in-place backend restart (plugin installed, config changed):
+// stop the child, spawn again — the preferred port keeps the origin, the
+// window reloads, the app never exits.
+let restartingBackend = false;
+async function restartBackend() {
+  if (restartingBackend || quitting || !dshRuntime) return;
+  restartingBackend = true;
+  try {
+    showPage(restartingHtml());
+    if (dsh && dsh.running) await dsh.stop();
+    const url = await spawnBackend();
+    if (!quitting && mainWindow) navigateToDsh(url);
+  } catch (err) {
+    showPage(backendDownHtml({ code: null, signal: null }, String(err?.message || err)));
+  } finally {
+    restartingBackend = false;
+  }
+}
+
 function createShellWindow() {
   const stateDir = app.getPath('userData');
   mainWindow = new BrowserWindow({
     ...loadWindowState(stateDir),
+    // e2e drives windows over CDP; keeping them hidden stops them stealing
+    // focus (and collecting the user's keystrokes) mid-test run.
+    show: !E2E,
     webPreferences: {
+      backgroundThrottling: !E2E,
       // The renderer is dsh's web app plus every plugin's client bundle;
       // none of them get Node. Anything needing privilege belongs in this
       // process behind a narrow IPC call.

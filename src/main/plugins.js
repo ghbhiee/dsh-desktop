@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
+const { dshInvocation } = require('./dsh-command');
 
 // The desktop profile's plugins, and how the app obtains them. Two sources,
 // per the build brief, and they are not exclusive: a local clone when one
@@ -46,30 +47,58 @@ function resolveSpec(plugin, { home } = {}) {
   return `github:ghbhiee/${plugin.name}`;
 }
 
-function installPlugin({ dshBin, env, profileName, spec, timeoutMs = 120_000 }) {
+// Works with either runtime shape — the system dsh binary or the bundled
+// copy on Electron-as-Node. Both still need pnpm on the child's PATH, since
+// `dsh plugin` forwards to it.
+function installPlugin({ runtime, env, profileName, spec, timeoutMs = 120_000 }) {
+  const inv = dshInvocation(runtime, ['plugin', '--profile', profileName, 'add', spec], {
+    baseEnv: env,
+  });
   return new Promise((resolve) => {
-    execFile(
-      dshBin,
-      ['plugin', '--profile', profileName, 'add', spec],
-      { env, timeout: timeoutMs },
-      (err, stdout, stderr) => {
-        resolve(err ? { ok: false, spec, error: `${err.message}\n${stderr}` } : { ok: true, spec });
-      }
-    );
+    execFile(inv.command, inv.args, { env: inv.env, timeout: timeoutMs }, (err, stdout, stderr) => {
+      resolve(
+        err
+          ? { ok: false, spec, error: `${err.message}\n${stderr}`, output: `${stdout}\n${stderr}` }
+          : { ok: true, spec, output: `${stdout}\n${stderr}`.trim() }
+      );
+    });
   });
 }
 
 // Installs whatever is missing, one at a time (pnpm and the profile's
 // package.json do not take concurrent writers). Never throws — the app boots
 // with what it has; failures are returned for reporting.
-async function installMissingPlugins({ dshBin, env, profileName, profileDir, plugins = DEFAULT_PLUGINS, onProgress = () => {} }) {
+async function installMissingPlugins({ runtime, env, profileName, profileDir, plugins = DEFAULT_PLUGINS, onProgress = () => {} }) {
   const results = [];
   for (const plugin of missingPlugins(profileDir, plugins)) {
     const spec = resolveSpec(plugin);
     onProgress(`Installing ${plugin.name}…`);
-    results.push(await installPlugin({ dshBin, env, profileName, spec }));
+    results.push(await installPlugin({ runtime, env, profileName, spec }));
   }
   return results;
+}
+
+// What the plugin-manager UI lists: every dsh-plugin-* in the profile, with
+// its version and (for link: installs) where the symlink actually points.
+function listInstalledPluginDetails(profileDir) {
+  const nm = path.join(profileDir, 'node_modules');
+  if (!fs.existsSync(nm)) return [];
+  return fs
+    .readdirSync(nm)
+    .filter((name) => name.startsWith('dsh-plugin-'))
+    .map((name) => {
+      const dir = path.join(nm, name);
+      let version = null;
+      let linkTarget = null;
+      try {
+        version = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version;
+      } catch {}
+      try {
+        if (fs.lstatSync(dir).isSymbolicLink()) linkTarget = fs.realpathSync(dir);
+      } catch {}
+      return { name, version, linkTarget };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 module.exports = {
@@ -77,6 +106,8 @@ module.exports = {
   missingPlugins,
   installedPlugins,
   resolveSpec,
+  installPlugin,
   installMissingPlugins,
+  listInstalledPluginDetails,
   expandHome,
 };

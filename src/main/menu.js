@@ -6,11 +6,27 @@
 
 const REPO_URL = 'https://github.com/ghbhiee/dsh-desktop';
 
-function buildMenuTemplate({ openExternal }) {
+function buildMenuTemplate({ openExternal, onManagePlugins, onRestartBackend }) {
   return [
     { role: 'appMenu' },
     { role: 'fileMenu' },
     { role: 'editMenu' },
+    {
+      label: 'Plugins',
+      submenu: [
+        {
+          id: 'manage-plugins',
+          label: 'Manage Plugins…',
+          click: () => onManagePlugins?.(),
+        },
+        { type: 'separator' },
+        {
+          id: 'restart-dsh',
+          label: 'Restart dsh',
+          click: () => onRestartBackend?.(),
+        },
+      ],
+    },
     {
       label: 'View',
       submenu: [

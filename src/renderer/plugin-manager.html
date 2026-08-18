@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>插件管理</title>
+<style>
+  body { font: 14px/1.6 -apple-system, system-ui, sans-serif; margin: 0;
+         background: #1e1e1e; color: #ddd; }
+  main { padding: 1.25rem 1.5rem; }
+  h1 { font-size: 1.1rem; margin: 0 0 1rem; }
+  h2 { font-size: .9rem; color: #9ab; margin: 1.25rem 0 .5rem; }
+  ul#installed { list-style: none; margin: 0; padding: 0; }
+  ul#installed li { padding: .3rem .5rem; border-radius: 4px; }
+  ul#installed li:nth-child(odd) { background: #252525; }
+  .ver { color: #8a8; margin-left: .5rem; }
+  .link { color: #789; font-size: .8rem; display: block; overflow: hidden;
+          text-overflow: ellipsis; white-space: nowrap; }
+  .row { display: flex; gap: .5rem; }
+  input#spec { flex: 1; padding: .5rem .6rem; border-radius: 6px; border: 1px solid #444;
+               background: #141414; color: #eee; font-size: .9rem; }
+  input#spec:focus { outline: none; border-color: #4a7dff; }
+  button { padding: .5rem 1.1rem; border: none; border-radius: 6px; cursor: pointer;
+           background: #4a7dff; color: #fff; font-size: .9rem; }
+  button.secondary { background: #444; }
+  button:disabled { opacity: .5; cursor: default; }
+  .hint { color: #888; font-size: .8rem; margin: .35rem 0 0; }
+  pre { background: #111; border-radius: 6px; padding: .7rem .8rem; font-size: .78rem;
+        white-space: pre-wrap; word-break: break-all; margin: .5rem 0 0; min-height: 1.2em; }
+  #cmdwrap { position: relative; }
+  #copy { position: absolute; top: .45rem; right: .45rem; padding: .2rem .6rem;
+          font-size: .75rem; }
+  #status { color: #aca; }
+  #status.err { color: #d88; }
+</style>
+</head>
+<body>
+<main>
+  <h1>插件管理</h1>
+
+  <h2>已安装</h2>
+  <ul id="installed"><li>加载中…</li></ul>
+
+  <h2>安装新插件</h2>
+  <div class="row">
+    <input id="spec" placeholder="本地路径（~/dsh/dsh-plugin-x）· GitHub 地址 · owner/repo · 插件名" spellcheck="false">
+    <button id="install">安装</button>
+  </div>
+  <p class="hint">支持：本地目录、https://github.com/owner/repo、github:owner/repo、owner/repo、纯插件名（默认 ghbhiee/dsh-plugin-*）</p>
+
+  <h2>等价终端命令（可复制自行安装，装完在菜单里 Restart dsh）</h2>
+  <div id="cmdwrap">
+    <pre id="cmd">输入插件来源后生成…</pre>
+    <button id="copy" class="secondary">复制</button>
+  </div>
+
+  <h2>状态</h2>
+  <pre id="status">就绪。安装成功后会自动重启 dsh 服务（客户端无需重启）。</pre>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  let lastCommand = '';
+
+  async function refreshInstalled() {
+    const state = await pluginAPI.state();
+    const ul = $('installed');
+    ul.innerHTML = '';
+    if (!state.installed.length) ul.innerHTML = '<li>（无）</li>';
+    for (const p of state.installed) {
+      const li = document.createElement('li');
+      li.innerHTML = `<strong></strong><span class="ver"></span><span class="link"></span>`;
+      li.querySelector('strong').textContent = p.name;
+      li.querySelector('.ver').textContent = p.version ? 'v' + p.version : '';
+      li.querySelector('.link').textContent = p.linkTarget ? '→ ' + p.linkTarget : '';
+      ul.append(li);
+    }
+  }
+
+  let previewTimer;
+  $('spec').addEventListener('input', () => {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(async () => {
+      const input = $('spec').value.trim();
+      if (!input) { $('cmd').textContent = '输入插件来源后生成…'; lastCommand = ''; return; }
+      const result = await pluginAPI.preview(input);
+      if (result.error) { $('cmd').textContent = result.error; lastCommand = ''; return; }
+      lastCommand = result.command;
+      $('cmd').textContent = result.command + (result.warning ? `\n⚠ ${result.warning}` : '');
+    }, 200);
+  });
+
+  $('copy').addEventListener('click', async () => {
+    if (!lastCommand) return;
+    await pluginAPI.copy(lastCommand);
+    $('copy').textContent = '已复制';
+    setTimeout(() => ($('copy').textContent = '复制'), 1200);
+  });
+
+  $('install').addEventListener('click', async () => {
+    const input = $('spec').value.trim();
+    if (!input) return;
+    $('install').disabled = true;
+    $('status').className = '';
+    $('status').textContent = '安装中…（pnpm 解析依赖，GitHub 源需要网络）';
+    try {
+      const result = await pluginAPI.install(input);
+      if (result.ok) {
+        $('status').textContent = `已安装 ${result.spec}，dsh 已重启。\n${result.output || ''}`;
+        $('spec').value = '';
+        await refreshInstalled();
+      } else {
+        $('status').className = 'err';
+        $('status').textContent = `安装失败：${result.error}`;
+      }
+    } finally {
+      $('install').disabled = false;
+    }
+  });
+
+  refreshInstalled();
+</script>
+</body>
+</html>
