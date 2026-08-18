@@ -57,6 +57,18 @@ test('M2: the Edit menu carries the clipboard roles', async () => {
   await app.close();
 });
 
+test('the dsh origin is stable across relaunches (settings survive)', async () => {
+  const first = await launchApp();
+  const port1 = new URL(first.win.url()).port;
+  await first.app.close();
+
+  const second = await launchApp();
+  const port2 = new URL(second.win.url()).port;
+  await second.app.close();
+
+  expect(port2).toBe(port1);
+});
+
 test('M2: off-origin navigation is sent to the system browser', async () => {
   const { app, win } = await launchApp();
 

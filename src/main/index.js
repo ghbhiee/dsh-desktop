@@ -21,6 +21,7 @@ const {
 } = require('./error-page');
 const { buildMenuTemplate } = require('./menu');
 const { loadWindowState, trackWindowState } = require('./window-state');
+const { loadPreferredPort, savePreferredPort } = require('./port-store');
 
 const URL_TIMEOUT_MS = 45_000;
 // Smoke mode: launch, wait for the dsh UI to load, print a verdict, quit.
@@ -170,8 +171,29 @@ async function startUp() {
 
   if (quitting) return;
   showPage(loadingHtml('Starting dsh…'));
-  const url = await spawnDsh();
+  const url = await spawnBackend();
   if (!quitting) navigateToDsh(url);
+}
+
+// Reuse the port dsh got last time so the origin — and the web UI's
+// origin-keyed state with it — stays stable across launches. A taken port
+// makes dsh exit with EADDRINUSE (verified; it never picks another by
+// itself), so that failure falls back to an OS-assigned one.
+async function spawnBackend() {
+  const { dshHome, profileName } = backendPaths();
+  const preferred = loadPreferredPort(dshHome, profileName);
+  if (preferred) {
+    try {
+      return await spawnDsh(preferred);
+    } catch (err) {
+      if (quitting) throw err;
+      console.warn(
+        `preferred port ${preferred} unavailable, retrying with an OS-assigned one: ` +
+          String(err?.message || err).split('\n')[0]
+      );
+    }
+  }
+  return spawnDsh(0);
 }
 
 function dshVersion(runtime, env) {
@@ -184,44 +206,57 @@ function dshVersion(runtime, env) {
   });
 }
 
-// Spawns dsh and resolves with the URL it announces. Refuses to spawn into a
-// quit already in progress — an async startup step resuming after
-// before-quit ran must not orphan a fresh child.
-function spawnDsh() {
+// Spawns dsh on the given port (0 = OS-assigned) and resolves with the URL
+// it announces; the announced port becomes the profile's preference. A death
+// before the announcement rejects here (a spawn failure the caller may retry
+// differently); one after it is an unexpected exit the window must explain.
+// Refuses to spawn into a quit already in progress — an async startup step
+// resuming after before-quit ran must not orphan a fresh child.
+function spawnDsh(port) {
   if (quitting) return Promise.reject(new Error('quit in progress'));
-  const { profileName, profileDir, env } = backendPaths();
+  const { dshHome, profileName, profileDir, env } = backendPaths();
   ensureProfile(profileDir);
 
   const inv = dshInvocation(
     dshRuntime,
-    ['--profile', profileName, '--host', '127.0.0.1', '--port', '0'],
+    ['--profile', profileName, '--host', '127.0.0.1', '--port', String(port)],
     { baseEnv: env }
   );
-  dsh = new DshProcess({ command: inv.command, args: inv.args, env: inv.env });
+  const proc = (dsh = new DshProcess({ command: inv.command, args: inv.args, env: inv.env }));
 
   const urlPromise = new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(
         new Error(
-          `dsh did not announce a URL within ${URL_TIMEOUT_MS / 1000}s.\n\nRecent output:\n${dsh.recentOutput}`
+          `dsh did not announce a URL within ${URL_TIMEOUT_MS / 1000}s.\n\nRecent output:\n${proc.recentOutput}`
         )
       );
     }, URL_TIMEOUT_MS);
-    dsh.once('url', (url) => {
+    proc.once('url', (url) => {
       clearTimeout(timer);
+      savePreferredPort(dshHome, profileName, Number(new URL(url).port));
       resolve(url);
     });
-    dsh.once('error', (err) => {
+    proc.once('error', (err) => {
       clearTimeout(timer);
       reject(err);
     });
+    proc.on('exit', (info) => {
+      if (!proc.url) {
+        clearTimeout(timer);
+        reject(
+          new Error(
+            `dsh exited before announcing a URL (code ${info.code}, signal ${info.signal}).\n\n` +
+              proc.recentOutput.slice(-1000)
+          )
+        );
+      } else if (!info.expected && !quitting) {
+        onUnexpectedExit(info);
+      }
+    });
   });
 
-  dsh.on('exit', (info) => {
-    if (!info.expected && !quitting) onUnexpectedExit(info);
-  });
-
-  dsh.start();
+  proc.start();
   return urlPromise;
 }
 
@@ -244,7 +279,7 @@ async function retryBackend() {
   if (!mainWindow) return;
   showPage(restartingHtml());
   try {
-    const url = await spawnDsh();
+    const url = await spawnBackend();
     if (mainWindow) navigateToDsh(url);
   } catch (err) {
     showPage(backendDownHtml({ code: null, signal: null }, String(err?.message || err)));
