@@ -1,12 +1,13 @@
 'use strict';
 
-const { app, BrowserWindow, dialog, shell } = require('electron');
+const { app, BrowserWindow, shell } = require('electron');
 const path = require('node:path');
 
 const { ensureProfile } = require('./profile');
 const { buildDshEnv } = require('./dsh-env');
 const { resolveDshBin } = require('./dsh-bin');
 const { DshProcess } = require('./dsh-process');
+const { backendDownHtml, restartingHtml, toDataUrl, ACTION_SCHEME } = require('./error-page');
 
 const URL_TIMEOUT_MS = 45_000;
 // Smoke mode: launch, wait for the dsh UI to load, print a verdict, quit.
@@ -15,6 +16,8 @@ const SMOKE = process.env.DSH_DESKTOP_SMOKE === '1';
 
 let mainWindow = null;
 let dsh = null;
+let dshBin = null;
+let dshOrigin = null;
 let quitting = false;
 
 if (!app.requestSingleInstanceLock()) {
@@ -43,10 +46,17 @@ function main() {
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, () => app.quit());
   }
+  // A main-process crash must still not leave a stray dsh behind.
+  process.on('uncaughtException', (err) => {
+    console.error('uncaught exception in main:', err);
+    const finish = () => app.exit(1);
+    if (dsh && dsh.running) dsh.stop().then(finish, finish);
+    else finish();
+  });
 }
 
 async function startUp() {
-  const dshBin = resolveDshBin({ override: process.env.DSH_DESKTOP_DSH_BIN });
+  dshBin = resolveDshBin({ override: process.env.DSH_DESKTOP_DSH_BIN });
   if (!dshBin) {
     return fatal(
       'dsh not found',
@@ -56,14 +66,14 @@ async function startUp() {
       )
     );
   }
-  const url = await spawnDsh(dshBin);
+  const url = await spawnDsh();
   createWindow(url);
 }
 
 // Spawns dsh and resolves with the URL it announces. The app owns a private
 // DSH_HOME under userData — the user's ~/.dsh (and the launchd service's web
 // profile on port 3080) are never touched.
-function spawnDsh(dshBin) {
+function spawnDsh() {
   const dshHome = path.join(app.getPath('userData'), 'dsh-home');
   const profileName = process.env.DSH_DESKTOP_PROFILE || 'desktop';
   ensureProfile(path.join(dshHome, 'profiles', profileName));
@@ -97,45 +107,46 @@ function spawnDsh(dshBin) {
   });
 
   dsh.on('exit', (info) => {
-    if (!info.expected && !quitting) onUnexpectedExit(dshBin, info);
+    if (!info.expected && !quitting) onUnexpectedExit(info);
   });
 
   dsh.start();
   return urlPromise;
 }
 
-// dsh died under us: never a blank window — say what happened, offer a retry.
-async function onUnexpectedExit(dshBin, info) {
-  const detail =
-    `dsh exited (code ${info.code}, signal ${info.signal}).\n\n` +
-    `Recent output:\n${(dsh?.recentOutput || '').slice(-2000)}`;
+// dsh died under us: never a blank window — the window itself says what
+// happened and offers a restart.
+function onUnexpectedExit(info) {
+  const output = dsh?.recentOutput || '';
   if (SMOKE) {
-    console.log('SMOKE FAIL dsh exited early: ' + detail.replace(/\n/g, ' | '));
+    console.log(
+      `SMOKE FAIL dsh exited early (code ${info.code}, signal ${info.signal}): ` +
+        output.slice(-500).replace(/\n/g, ' | ')
+    );
     return app.quit();
   }
-  const { response } = await dialog.showMessageBox(mainWindow ?? undefined, {
-    type: 'error',
-    message: 'dsh exited unexpectedly',
-    detail,
-    buttons: ['Restart dsh', 'Quit'],
-    defaultId: 0,
-    cancelId: 1,
-  });
-  if (response === 0) {
-    try {
-      const url = await spawnDsh(dshBin);
-      if (mainWindow) mainWindow.loadURL(url);
-      else createWindow(url);
-    } catch (err) {
-      fatal('dsh failed to restart', err);
-    }
-  } else {
-    app.quit();
+  if (!mainWindow) return app.quit();
+  mainWindow.loadURL(toDataUrl(backendDownHtml(info, output.slice(-4000))));
+}
+
+async function retryBackend() {
+  if (!mainWindow) return;
+  mainWindow.loadURL(toDataUrl(restartingHtml()));
+  try {
+    const url = await spawnDsh();
+    if (!mainWindow) return;
+    dshOrigin = new URL(url).origin;
+    mainWindow.loadURL(url);
+  } catch (err) {
+    if (!mainWindow) return;
+    mainWindow.loadURL(
+      toDataUrl(backendDownHtml({ code: null, signal: null }, String(err?.message || err)))
+    );
   }
 }
 
 function createWindow(url) {
-  const dshOrigin = new URL(url).origin;
+  dshOrigin = new URL(url).origin;
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -150,11 +161,19 @@ function createWindow(url) {
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url: target }) => {
-    if (safeOrigin(target) !== dshOrigin) shell.openExternal(target);
+    if (isExternal(target)) shell.openExternal(target);
     return { action: 'deny' };
   });
   mainWindow.webContents.on('will-navigate', (event, target) => {
-    if (safeOrigin(target) !== dshOrigin) {
+    // The app's own action links (from the in-window error pages).
+    if (target.startsWith(ACTION_SCHEME)) {
+      event.preventDefault();
+      const action = target.slice(ACTION_SCHEME.length);
+      if (action === 'retry') retryBackend();
+      else if (action === 'quit') app.quit();
+      return;
+    }
+    if (isExternal(target)) {
       event.preventDefault();
       shell.openExternal(target);
     }
@@ -179,18 +198,23 @@ function createWindow(url) {
   mainWindow.loadURL(url);
 }
 
-function safeOrigin(target) {
+// External means: leaves the dsh origin and is not one of the app's own
+// pages (data: error pages, dshdesk: actions).
+function isExternal(target) {
+  if (target.startsWith('data:') || target.startsWith(ACTION_SCHEME)) return false;
   try {
-    return new URL(target).origin;
+    return new URL(target).origin !== dshOrigin;
   } catch {
-    return null;
+    return false;
   }
 }
 
 async function fatal(message, err) {
+  console.error(message, err);
   if (SMOKE) {
     console.log(`SMOKE FAIL ${message}: ${err?.message || err}`.replace(/\n/g, ' | '));
   } else {
+    const { dialog } = require('electron');
     dialog.showErrorBox(message, String(err?.message || err));
   }
   if (dsh) await dsh.stop().catch(() => {});

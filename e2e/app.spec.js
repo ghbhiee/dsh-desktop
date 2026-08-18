@@ -1,18 +1,19 @@
 'use strict';
 
 const { test, expect, _electron } = require('@playwright/test');
-const { execSync } = require('node:child_process');
+const { execSync, execFileSync } = require('node:child_process');
 
 // Drives the real app: Electron main process, spawned dsh, real profile.
-// This is the mechanical form of M0's check — no human eyeballs required:
-// the window is on dsh's announced loopback URL, a session composer renders,
-// the workbench panel opens, and no dsh outlives the app.
+// These are the mechanical forms of the M0/M1 checks — no human eyeballs.
 
-function strayDshProcesses() {
+function dshPids() {
   try {
-    return execSync('pgrep -fl -- "--profile desktop"', { encoding: 'utf8' }).trim();
+    return execSync('pgrep -f -- "--profile desktop"', { encoding: 'utf8' })
+      .trim()
+      .split('\n')
+      .filter(Boolean);
   } catch {
-    return ''; // pgrep exits 1 when nothing matches
+    return []; // pgrep exits 1 when nothing matches
   }
 }
 
@@ -35,17 +36,20 @@ async function clearGreetingDialogs(win) {
   } catch {}
 }
 
-test('M0: dsh UI loads, a session renders, workbench opens, clean exit', async () => {
+async function launchToUi() {
   const app = await _electron.launch({ args: ['.'] });
   const win = await app.firstWindow();
-
   await win.waitForLoadState('domcontentloaded');
+  await clearGreetingDialogs(win);
+  return { app, win };
+}
+
+test('M0: dsh UI loads, a session renders, workbench opens, clean exit', async () => {
+  const { app, win } = await launchToUi();
+
   expect(win.url()).toMatch(/^http:\/\/127\.0\.0\.1:\d+\//);
 
-  await clearGreetingDialogs(win);
-
-  // A session renders: the composer is live (send control present, workspace
-  // picker mounted).
+  // A session renders: the composer is live.
   await win.getByRole('button', { name: /new session/i }).first().click({ timeout: 15_000 });
   await expect(win.getByRole('button', { name: 'Send message' })).toBeVisible({ timeout: 15_000 });
   await win.screenshot({ path: 'e2e/screens/m0-session.png' });
@@ -60,5 +64,40 @@ test('M0: dsh UI loads, a session renders, workbench opens, clean exit', async (
 
   await app.close();
 
-  expect(strayDshProcesses()).toBe('');
+  expect(dshPids()).toEqual([]);
+});
+
+test('M1: a killed dsh yields an in-window error page, and Retry recovers', async () => {
+  const { app, win } = await launchToUi();
+
+  const pids = dshPids();
+  expect(pids.length).toBe(1);
+  process.kill(Number(pids[0]), 'SIGKILL');
+
+  // The window must say what happened — not go blank.
+  await expect(win.getByText('dsh exited unexpectedly')).toBeVisible({ timeout: 15_000 });
+  await win.screenshot({ path: 'e2e/screens/m1-backend-down.png' });
+
+  await win.getByText('Restart dsh').click();
+  await clearGreetingDialogs(win);
+  await expect(win.getByRole('button', { name: /new session/i }).first()).toBeVisible({
+    timeout: 30_000,
+  });
+  expect(dshPids().length).toBe(1);
+
+  await app.close();
+  expect(dshPids()).toEqual([]);
+});
+
+test('M1: a second launch defers to the first — one window, one child', async () => {
+  const { app, win } = await launchToUi();
+
+  // The second instance should exit on its own (single-instance lock).
+  execFileSync('node_modules/.bin/electron', ['.'], { timeout: 30_000, stdio: 'ignore' });
+
+  expect(dshPids().length).toBe(1);
+  expect(win.isClosed()).toBe(false);
+
+  await app.close();
+  expect(dshPids()).toEqual([]);
 });
