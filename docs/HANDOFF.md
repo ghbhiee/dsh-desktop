@@ -22,7 +22,9 @@ that backend lives and who starts it*. Three modes, in increasing difficulty:
 
 A and B are the same app with different sources of the dsh binary; C is a
 different problem — no child process at all, just a window plus authentication.
-Build B first (it is A minus the bundling), then A, then C.
+They were built in that order (B, then A, then C), and a fourth arrived later:
+**attach**, connecting to a dsh someone else already started. See the status
+section below for what exists today.
 
 ## Research already done — do not re-derive
 
@@ -119,29 +121,23 @@ bound to the public hostname (`ds.tokencv.com`).
 **Therefore the first question mode C must answer, before any UI work: can
 Electron complete a WebAuthn ceremony with a platform authenticator (Touch ID)?**
 
-> **Answered 2026-08-18** with a throwaway hidden BrowserWindow (sandboxed,
-> context-isolated) loading `https://ds.tokencv.com/` (redirects to `/auth`):
-> `PublicKeyCredential` exists, but
-> `isUserVerifyingPlatformAuthenticatorAvailable()` returns **false** —
-> Electron has no macOS platform authenticator, so the Touch ID ceremony
-> cannot happen in-app. Mode C requires one of the options below; picking one
-> is the user's call since (1) and (2) are gateway-repo changes.
-Electron's support here has historically been limited and version-dependent.
-Verify it with a throwaway BrowserWindow against the real gateway before
-designing anything else. If it does not work, the options are, in order of
-preference:
+**Answered 2026-08-18, and the answer is no.** A throwaway hidden
+BrowserWindow (sandboxed, context-isolated) loading `https://ds.tokencv.com/`
+reports `PublicKeyCredential` present but
+`isUserVerifyingPlatformAuthenticatorAvailable()` **false** — Electron has no
+macOS platform authenticator, so the ceremony cannot happen in-app at all.
 
-1. **Pair via the system browser.** Log in there (Touch ID definitely works),
-   and give the gateway a short-lived pairing code the app exchanges for a
-   session cookie it stores in its own `session`. This is a change in the
-   gateway repo, and it fits the flow that already exists (`PENDING_DIR` +
-   `dsh-approve` is already a pairing step).
-2. Add a device-credential path to the gateway (mTLS or a long-lived device
-   token), again a gateway change, with its own security review.
-3. Fall back to opening the remote UI in the system browser and treating mode C
-   as out of scope for the app.
+Three ways out were on the table: pair via the system browser; add a
+device-credential path (mTLS or a long-lived token) to the gateway; or drop
+mode C and just open the remote UI in a browser.
 
-Do not design around an assumption here. Verify, then pick, then tell the user.
+**Option 1 shipped.** The gateway grew `/auth/pair/code` (a signed-in browser
+mints an 8-char single-use code, 2-minute TTL) and `/auth/pair/claim` (the app
+swaps it for its own session cookie). The claimed session carries the same
+user and credential lineage as the browser login that minted it, so revoking
+the passkey still kills both. The login page only shows a code when opened
+with `?pair=1`, which is how the app opens it — ordinary browser logins are
+untouched. Deployed on server 15 on 2026-08-18.
 
 ## Status — all milestones landed (2026-08-19)
 
