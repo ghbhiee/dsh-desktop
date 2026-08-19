@@ -141,6 +141,12 @@ async function startUp() {
     backendUrl: currentBackend.url ?? null,
     ...backendPaths(),
     restartBackend,
+    // Goes through the app's own session, so a remote page is fetched with
+    // the paired cookie exactly as the window would.
+    fetchPage: async (url) => {
+      const res = await session.defaultSession.fetch(url);
+      return res.text();
+    },
   }));
   registerBackendPicker(() => ({
     currentBackend,

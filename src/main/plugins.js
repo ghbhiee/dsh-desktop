@@ -101,8 +101,29 @@ function listInstalledPluginDetails(profileDir) {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// The plugins a running dsh actually loaded, read from the boot payload its
+// page carries (`window.__DSH_BOOT__`). This is the only inventory available
+// for an instance whose filesystem we cannot see — a remote one. It lists
+// client-visible plugins only: a host-only plugin (dsh-plugin-discord ships
+// no client bundle) never appears here, so the caller must say so.
+function parseBootPlugins(html) {
+  const match = /window\.__DSH_BOOT__\s*=\s*(\{.*?\})<\/script>/s.exec(String(html));
+  if (!match) return null;
+  let boot;
+  try {
+    boot = JSON.parse(match[1]);
+  } catch {
+    return null;
+  }
+  const ids = (boot.entries || [])
+    .map((entry) => entry.id)
+    .filter((id) => typeof id === 'string' && !id.startsWith('@deepseek-ai/'));
+  return [...new Set(ids)].sort().map((name) => ({ name, version: null, linkTarget: null }));
+}
+
 module.exports = {
   DEFAULT_PLUGINS,
+  parseBootPlugins,
   missingPlugins,
   installedPlugins,
   resolveSpec,

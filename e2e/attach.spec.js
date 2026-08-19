@@ -113,10 +113,24 @@ test('attach：连接外部 dsh（零子进程），切回托管模式恢复自�
   }
 });
 
-test('attach：插件窗口仍可输入，命令指向被连的那个实例', async () => {
+test('attach：插件窗口列出被连实例的插件，命令也指向它', async () => {
   test.setTimeout(300_000);
   const external = startExternalDsh();
   const extUrl = await external.url;
+  // Give the external instance a plugin the app's own profile does not have,
+  // so a list showing the app's own profile cannot pass by accident.
+  const extPluginDir = path.join(
+    external.home,
+    'profiles',
+    'desktop',
+    'node_modules',
+    'dsh-plugin-only-external'
+  );
+  fs.mkdirSync(extPluginDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(extPluginDir, 'package.json'),
+    JSON.stringify({ name: 'dsh-plugin-only-external', version: '9.9.9' })
+  );
 
   try {
     const userdata = fs.mkdtempSync(path.join(os.tmpdir(), 'dshd-attach-pm-'));
@@ -137,6 +151,14 @@ test('attach：插件窗口仍可输入，命令指向被连的那个实例', as
     });
     const pm = await windowPromise;
     await pm.waitForLoadState('domcontentloaded');
+
+    // The list describes the instance the window is on, not the app's own
+    // profile — which is not even running right now.
+    await expect(pm.locator('#installed')).toContainText('dsh-plugin-only-external', {
+      timeout: 15_000,
+    });
+    await expect(pm.locator('#installed')).not.toContainText('dsh-plugin-workbench');
+    await expect(pm.locator('#source')).toContainText(external.home);
 
     // Typing stays possible — the copyable command is the only useful thing
     // here, and disabling the field used to take it away with it.

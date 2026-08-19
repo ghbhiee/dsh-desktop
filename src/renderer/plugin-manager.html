@@ -28,6 +28,7 @@
            border-left: 2px solid #c8a35a; background: rgba(200,163,90,.12);
            color: #d8cfbb; font-size: .85rem; line-height: 1.55; }
   .scope code { font-size: .95em; }
+  .source { font-weight: 400; font-size: .78rem; color: #888; margin-left: .4rem; }
   pre { background: #111; border-radius: 6px; padding: .7rem .8rem; font-size: .78rem;
         white-space: pre-wrap; word-break: break-all; margin: .5rem 0 0; min-height: 1.2em; }
   #cmdwrap { position: relative; }
@@ -43,7 +44,7 @@
 
   <p id="scope" class="scope" hidden></p>
 
-  <h2>已安装</h2>
+  <h2>已安装 <span id="source" class="source"></span></h2>
   <ul id="installed"><li>加载中…</li></ul>
 
   <h2>安装新插件</h2>
@@ -85,9 +86,19 @@
     $('scope').hidden = false;
   }
 
+  // Where the list came from decides how much it can be trusted, so say it.
+  function describeSource(inv) {
+    if (!inv) return '';
+    if (inv.source === 'own') return '· 应用自己的 profile';
+    if (inv.source === 'attached') return `· 该实例的 profile：${inv.detail}`;
+    if (inv.source === 'boot') return '· 读自该实例页面，仅含带客户端界面的插件';
+    return '· 无法读取该实例的插件列表';
+  }
+
   async function refreshInstalled() {
     const state = await pluginAPI.state();
     applyTarget(state.target);
+    $('source').textContent = describeSource(state.inventory);
     const ul = $('installed');
     ul.innerHTML = '';
     if (!state.installed.length) ul.innerHTML = '<li>（无）</li>';

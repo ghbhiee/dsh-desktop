@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { normalizePluginSpec, buildInstallCommand } = require('./plugin-spec');
-const { listInstalledPluginDetails, installPlugin } = require('./plugins');
+const { listInstalledPluginDetails, installPlugin, parseBootPlugins } = require('./plugins');
 const { ensureProfile } = require('./profile');
 const { inspectPort, readDshHome } = require('./detect-local');
 
@@ -91,6 +91,38 @@ async function commandTarget(context) {
   return { kind: 'managed', canInstall: true, runtime, dshHome, profileName };
 }
 
+// The plugin list must describe the instance the window is pointed at — not
+// the app's own profile, which is not even running in attach/remote mode.
+// Three sources, in order of fidelity:
+//   own      the app's profile directory (managed)
+//   attached that instance's profile directory, located via its own env
+//   boot     the served page's __DSH_BOOT__ payload (all we can see of a
+//            remote host; client-visible plugins only)
+async function connectedPlugins(context, target) {
+  if (target.kind === 'managed') {
+    return { source: 'own', list: listInstalledPluginDetails(context.profileDir) };
+  }
+
+  if (target.kind === 'attach' && target.dshHome && !target.dshHome.startsWith('$')) {
+    const dir = path.join(target.dshHome, 'profiles', target.profileName);
+    if (fs.existsSync(path.join(dir, 'node_modules'))) {
+      return { source: 'attached', detail: dir, list: listInstalledPluginDetails(dir) };
+    }
+  }
+
+  const origin = context.backendUrl;
+  if (origin && context.fetchPage) {
+    try {
+      const html = await context.fetchPage(origin + '/');
+      const list = parseBootPlugins(html);
+      if (list) return { source: 'boot', detail: origin, list };
+    } catch {
+      // fall through to the honest empty answer below
+    }
+  }
+  return { source: 'unknown', detail: origin || null, list: [] };
+}
+
 function validateLocal(norm) {
   if (norm.kind === 'local' && !fs.existsSync(path.join(norm.spec, 'package.json'))) {
     return { ...norm, warning: '路径不存在或缺少 package.json' };
@@ -104,12 +136,14 @@ function registerPluginManager(getContext) {
   handlersRegistered = true;
 
   ipcMain.handle('pm:state', async () => {
-    const { runtime, profileDir, backendType } = getContext();
-    const target = await commandTarget(getContext());
+    const context = getContext();
+    const target = await commandTarget(context);
+    const inventory = await connectedPlugins(context, target);
     return {
-      installed: listInstalledPluginDetails(profileDir),
-      runtimeType: runtime?.type ?? 'unknown',
-      backendType: backendType ?? 'managed',
+      installed: inventory.list,
+      inventory: { source: inventory.source, detail: inventory.detail },
+      runtimeType: context.runtime?.type ?? 'unknown',
+      backendType: context.backendType ?? 'managed',
       target,
     };
   });
