@@ -112,3 +112,52 @@ test('attach：连接外部 dsh（零子进程），切回托管模式恢复自�
     fs.rmSync(external.home, { recursive: true, force: true });
   }
 });
+
+test('attach：插件窗口仍可输入，命令指向被连的那个实例', async () => {
+  test.setTimeout(300_000);
+  const external = startExternalDsh();
+  const extUrl = await external.url;
+
+  try {
+    const userdata = fs.mkdtempSync(path.join(os.tmpdir(), 'dshd-attach-pm-'));
+    fs.writeFileSync(
+      path.join(userdata, 'config.json'),
+      JSON.stringify({ backend: { type: 'attach', url: extUrl } })
+    );
+    const { app } = await launchApp({
+      env: { DSH_DESKTOP_USERDATA: userdata },
+      toUi: false,
+    });
+    const extPattern = new RegExp('^' + extUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/');
+    await windowAt(app, extPattern);
+
+    const windowPromise = app.waitForEvent('window');
+    await app.evaluate(({ Menu }) => {
+      Menu.getApplicationMenu().getMenuItemById('manage-plugins').click();
+    });
+    const pm = await windowPromise;
+    await pm.waitForLoadState('domcontentloaded');
+
+    // Typing stays possible — the copyable command is the only useful thing
+    // here, and disabling the field used to take it away with it.
+    await expect(pm.locator('#spec')).toBeEnabled({ timeout: 10_000 });
+    await pm.fill('#spec', 'snake');
+    await expect(pm.locator('#cmd')).toContainText('dsh-plugin-snake', { timeout: 5000 });
+
+    // …and it targets the attached instance's own DSH_HOME and profile,
+    // not the app's managed one.
+    await expect(pm.locator('#cmd')).toContainText(external.home);
+    await expect(pm.locator('#cmd')).toContainText('--profile desktop');
+
+    // Installing is the part that is off — the app cannot restart an
+    // instance it does not manage — and the reason is on screen.
+    await expect(pm.locator('#install')).toBeDisabled();
+    await expect(pm.locator('#scope')).toContainText('无权重启');
+
+    await app.close();
+    fs.rmSync(userdata, { recursive: true, force: true });
+  } finally {
+    external.child.kill('SIGTERM');
+    fs.rmSync(external.home, { recursive: true, force: true });
+  }
+});

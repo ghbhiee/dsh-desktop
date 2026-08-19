@@ -24,6 +24,10 @@
   button.secondary { background: #444; }
   button:disabled { opacity: .5; cursor: default; }
   .hint { color: #888; font-size: .8rem; margin: .35rem 0 0; }
+  .scope { margin: 0 0 1rem; padding: .6rem .8rem; border-radius: 6px;
+           border-left: 2px solid #c8a35a; background: rgba(200,163,90,.12);
+           color: #d8cfbb; font-size: .85rem; line-height: 1.55; }
+  .scope code { font-size: .95em; }
   pre { background: #111; border-radius: 6px; padding: .7rem .8rem; font-size: .78rem;
         white-space: pre-wrap; word-break: break-all; margin: .5rem 0 0; min-height: 1.2em; }
   #cmdwrap { position: relative; }
@@ -36,6 +40,8 @@
 <body>
 <main>
   <h1>插件管理</h1>
+
+  <p id="scope" class="scope" hidden></p>
 
   <h2>已安装</h2>
   <ul id="installed"><li>加载中…</li></ul>
@@ -60,15 +66,28 @@
   const $ = (id) => document.getElementById(id);
   let lastCommand = '';
 
+  // The window can be pointed at a dsh the app does not manage. Typing and
+  // the copyable command stay available — that command is the whole point in
+  // that situation — but installing does not, because the app would have to
+  // restart an instance it does not own.
+  function applyTarget(target) {
+    if (!target || target.canInstall) return;
+    $('install').disabled = true;
+    const where =
+      target.kind === 'remote'
+        ? '远程实例'
+        : `本机另一个 dsh（profile ${target.profileName}${target.pid ? '，pid ' + target.pid : ''}）`;
+    $('scope').textContent =
+      `当前窗口连的是${where}，应用无权重启它——` +
+      `请复制下面的命令自己执行，然后重启那个实例（本机 launchd 服务用 ` +
+      `launchctl kickstart -k gui/$(id -u)/com.tokencv.dsh-web）。` +
+      (target.note ? ' ' + target.note : '');
+    $('scope').hidden = false;
+  }
+
   async function refreshInstalled() {
     const state = await pluginAPI.state();
-    if (state.backendType && state.backendType !== 'managed') {
-      $('spec').disabled = true;
-      $('install').disabled = true;
-      $('status').textContent =
-        '当前连接的是外部 dsh 实例——下面列出的是本应用自己 profile 里的插件；' +
-        '外部实例的插件请在运行它的机器上管理。';
-    }
+    applyTarget(state.target);
     const ul = $('installed');
     ul.innerHTML = '';
     if (!state.installed.length) ul.innerHTML = '<li>（无）</li>';

@@ -10,6 +10,7 @@ const { execFile } = require('node:child_process');
 
 const DSH_LINE = /\bdsh\b|\bdsh\/lib\/bin\.js\b/;
 const PORT_FLAG = /--port[= ](\d+)/;
+const PROFILE_FLAG = /--profile[= ]([\w.-]+)/;
 
 function parseDshPorts(psOutput) {
   const seen = new Set();
@@ -22,9 +23,50 @@ function parseDshPorts(psOutput) {
     const port = Number(portMatch[1]);
     if (port <= 0 || seen.has(port)) continue;
     seen.add(port);
-    found.push({ pid: Number(pidMatch[1]), port });
+    const profileMatch = PROFILE_FLAG.exec(line);
+    found.push({
+      pid: Number(pidMatch[1]),
+      port,
+      profile: profileMatch ? profileMatch[1] : null,
+    });
   }
   return found;
+}
+
+// A running dsh's DSH_HOME, read from its own environment. Absent means it
+// is using dsh's default (~/.dsh) — which is exactly what the caller needs
+// to know to write a correct command line for that instance.
+function readDshHome(pid) {
+  return new Promise((resolve) => {
+    execFile('ps', ['eww', '-o', 'command=', '-p', String(pid)], (err, stdout) => {
+      if (err) return resolve(null);
+      const match = /(?:^|\s)DSH_HOME=(\S+)/.exec(stdout);
+      resolve(match ? match[1] : null);
+    });
+  });
+}
+
+// Who is listening on a port, and with what profile. Asking the kernel via
+// lsof rather than pattern-matching the command line, because an instance
+// started with `--port 0` never carries its real port there — the launchd
+// service does, an ad-hoc `dsh` does not.
+function inspectPort(port) {
+  return new Promise((resolve) => {
+    execFile(
+      'lsof',
+      ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'],
+      { timeout: 5000 },
+      (err, stdout) => {
+        const pid = Number(String(stdout).trim().split('\n')[0]);
+        if (err || !Number.isInteger(pid) || pid <= 0) return resolve(null);
+        execFile('ps', ['-o', 'command=', '-p', String(pid)], (psErr, psOut) => {
+          if (psErr) return resolve({ pid, profile: null });
+          const match = PROFILE_FLAG.exec(psOut);
+          resolve({ pid, profile: match ? match[1] : null });
+        });
+      }
+    );
+  });
 }
 
 function scanLocalDshPorts({ excludePids = [] } = {}) {
@@ -36,4 +78,4 @@ function scanLocalDshPorts({ excludePids = [] } = {}) {
   });
 }
 
-module.exports = { parseDshPorts, scanLocalDshPorts };
+module.exports = { parseDshPorts, scanLocalDshPorts, readDshHome, inspectPort };

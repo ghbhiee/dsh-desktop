@@ -7,6 +7,7 @@ const path = require('node:path');
 const { normalizePluginSpec, buildInstallCommand } = require('./plugin-spec');
 const { listInstalledPluginDetails, installPlugin } = require('./plugins');
 const { ensureProfile } = require('./profile');
+const { inspectPort, readDshHome } = require('./detect-local');
 
 // The plugin-manager window: an app-owned page (not dsh's web UI), sandboxed
 // with a preload that exposes exactly four calls. Installation reuses the
@@ -42,6 +43,54 @@ function loadableBundleNames(profileDir) {
   });
 }
 
+// Which dsh a copyable command should target, and whether the app may run it
+// itself. Managed: our own child, ours to install into and restart. Attach:
+// somebody else's local instance — its profile and DSH_HOME are readable
+// from the process table, so the command can be exact, but the app neither
+// writes into a profile it does not own nor restarts a service it does not
+// manage (the launchd dsh-web is explicitly off limits). Remote: the work
+// belongs on the other host entirely.
+async function commandTarget(context) {
+  const { runtime, dshHome, profileName, backendType, backendUrl } = context;
+  if (backendType === 'attach' && backendUrl) {
+    const port = Number(new URL(backendUrl).port);
+    const found = await inspectPort(port);
+    if (found) {
+      const home = await readDshHome(found.pid);
+      return {
+        kind: 'attach',
+        canInstall: false,
+        runtime: { type: 'system', bin: 'dsh' },
+        dshHome: home || '$HOME/.dsh',
+        profileName: found.profile || '<profile>',
+        pid: found.pid,
+        note: home
+          ? null
+          : '该实例未设置 DSH_HOME，用的是 dsh 默认位置 ~/.dsh。',
+      };
+    }
+    return {
+      kind: 'attach',
+      canInstall: false,
+      runtime: { type: 'system', bin: 'dsh' },
+      dshHome: '$HOME/.dsh',
+      profileName: '<profile>',
+      note: '没能在进程表里认出这个实例，命令里的 profile 需要你自己填。',
+    };
+  }
+  if (backendType === 'remote') {
+    return {
+      kind: 'remote',
+      canInstall: false,
+      runtime: { type: 'system', bin: 'dsh' },
+      dshHome: '$HOME/.dsh',
+      profileName: '<profile>',
+      note: '远程实例的插件要在那台主机上安装。',
+    };
+  }
+  return { kind: 'managed', canInstall: true, runtime, dshHome, profileName };
+}
+
 function validateLocal(norm) {
   if (norm.kind === 'local' && !fs.existsSync(path.join(norm.spec, 'package.json'))) {
     return { ...norm, warning: '路径不存在或缺少 package.json' };
@@ -54,22 +103,31 @@ function registerPluginManager(getContext) {
   if (handlersRegistered) return;
   handlersRegistered = true;
 
-  ipcMain.handle('pm:state', () => {
+  ipcMain.handle('pm:state', async () => {
     const { runtime, profileDir, backendType } = getContext();
+    const target = await commandTarget(getContext());
     return {
       installed: listInstalledPluginDetails(profileDir),
       runtimeType: runtime?.type ?? 'unknown',
       backendType: backendType ?? 'managed',
+      target,
     };
   });
 
-  ipcMain.handle('pm:preview', (_event, input) => {
-    const { runtime, dshHome, profileName } = getContext();
+  ipcMain.handle('pm:preview', async (_event, input) => {
+    const context = getContext();
     const norm = normalizePluginSpec(input);
     if (norm.error) return norm;
+    const target = await commandTarget(context);
     return {
       ...validateLocal(norm),
-      command: buildInstallCommand({ runtime, dshHome, profileName, spec: norm.spec }),
+      command: buildInstallCommand({
+        runtime: target.runtime,
+        dshHome: target.dshHome,
+        profileName: target.profileName,
+        spec: norm.spec,
+      }),
+      target,
     };
   });
 
@@ -83,7 +141,9 @@ function registerPluginManager(getContext) {
     if (backendType && backendType !== 'managed') {
       return {
         ok: false,
-        error: '当前连接的是外部 dsh 实例——插件属于那个实例的 profile，请在运行它的机器上安装。',
+        error:
+          '当前窗口连的是应用管不到的 dsh 实例，装完也无权重启它。' +
+          '请复制上面的命令自己执行，然后重启那个实例。',
       };
     }
     const norm = normalizePluginSpec(input);

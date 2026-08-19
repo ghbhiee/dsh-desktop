@@ -138,6 +138,7 @@ async function startUp() {
   registerPluginManager(() => ({
     runtime: dshRuntime,
     backendType: currentBackend.type,
+    backendUrl: currentBackend.url ?? null,
     ...backendPaths(),
     restartBackend,
   }));
