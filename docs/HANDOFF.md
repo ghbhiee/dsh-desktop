@@ -172,9 +172,12 @@ request:
   restart. A taken port falls back to `--port 0`.
 - **DeepSeek icon**, built from dsh's own `favicon.svg`.
 
-Only one check still needs a human: **M5's real Touch ID round trip**
-(everything around it is verified against the live gateway — detection,
-browser hand-off, pairing page, real-gateway rejection of a bogus code).
+**M5 closed on 2026-08-18 23:40**, on the real gateway with a real Touch ID
+login: the browser minted a code (`pairing code issued by session …`), the
+app claimed it (`pairing claimed -> session 2c80ac84`), the cookie landed in
+the app's store, and `config.json` flipped to remote. Re-checked the next
+day — that session still answers 200 and is registered gateway-side. Nothing
+in this brief is left waiting on a human.
 
 ## Milestones
 
