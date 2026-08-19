@@ -62,6 +62,13 @@
 
   async function refreshInstalled() {
     const state = await pluginAPI.state();
+    if (state.backendType && state.backendType !== 'managed') {
+      $('spec').disabled = true;
+      $('install').disabled = true;
+      $('status').textContent =
+        '当前连接的是外部 dsh 实例——下面列出的是本应用自己 profile 里的插件；' +
+        '外部实例的插件请在运行它的机器上管理。';
+    }
     const ul = $('installed');
     ul.innerHTML = '';
     if (!state.installed.length) ul.innerHTML = '<li>（无）</li>';

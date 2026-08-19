@@ -55,10 +55,11 @@ function registerPluginManager(getContext) {
   handlersRegistered = true;
 
   ipcMain.handle('pm:state', () => {
-    const { runtime, profileDir } = getContext();
+    const { runtime, profileDir, backendType } = getContext();
     return {
       installed: listInstalledPluginDetails(profileDir),
       runtimeType: runtime?.type ?? 'unknown',
+      backendType: backendType ?? 'managed',
     };
   });
 
@@ -78,7 +79,13 @@ function registerPluginManager(getContext) {
   });
 
   ipcMain.handle('pm:install', async (_event, input) => {
-    const { runtime, env, dshHome, profileName, profileDir, restartBackend } = getContext();
+    const { runtime, env, profileName, profileDir, restartBackend, backendType } = getContext();
+    if (backendType && backendType !== 'managed') {
+      return {
+        ok: false,
+        error: '当前连接的是外部 dsh 实例——插件属于那个实例的 profile，请在运行它的机器上安装。',
+      };
+    }
     const norm = normalizePluginSpec(input);
     if (norm.error) return { ok: false, error: norm.error };
     if (norm.kind === 'local' && !fs.existsSync(path.join(norm.spec, 'package.json'))) {

@@ -11,6 +11,9 @@ const { dshInvocation } = require('./dsh-command');
 const { DshProcess } = require('./dsh-process');
 const { installMissingPlugins, installedPlugins, missingPlugins } = require('./plugins');
 const { registerPluginManager, openPluginManagerWindow } = require('./plugin-manager');
+const { registerBackendPicker, openBackendPickerWindow } = require('./backend-picker');
+const { loadBackendConfig, saveBackendConfig } = require('./backend-config');
+const { classifyBackendUrl } = require('./probe');
 const { isSupportedDshVersion, MIN_DSH_VERSION } = require('./version');
 const {
   backendDownHtml,
@@ -36,6 +39,14 @@ let dsh = null;
 let dshRuntime = null;
 let dshOrigin = null;
 let quitting = false;
+let currentBackend = { type: 'managed' };
+
+// Breadcrumbs for backend transitions — cheap, and the only way to see
+// where a headless flow stalled (tests read global.__backendTrace).
+function trace(entry) {
+  (global.__backendTrace ??= []).push(`${Date.now() % 1e7} ${entry}`);
+  console.log('[backend]', entry);
+}
 
 function openExternal(url) {
   if (E2E) {
@@ -118,16 +129,70 @@ async function startUp() {
         openExternal,
         onManagePlugins: () => openPluginManagerWindow(mainWindow),
         onRestartBackend: () => restartBackend(),
+        onBackendPicker: () => openBackendPickerWindow(mainWindow),
       })
     )
   );
   registerPluginManager(() => ({
     runtime: dshRuntime,
+    backendType: currentBackend.type,
     ...backendPaths(),
     restartBackend,
   }));
+  registerBackendPicker(() => ({
+    currentBackend,
+    managedChildPid: dsh?.child?.pid ?? null,
+    applyBackend,
+  }));
   createShellWindow();
 
+  currentBackend = loadBackendConfig(app.getPath('userData'));
+  await applyBackend(currentBackend, { persist: false });
+}
+
+// Point the window at a backend. Managed spawns our own dsh; attach probes
+// an already-running one and connects with no child process at all. The
+// choice persists in userData so the next launch goes straight there.
+async function applyBackend(backend, { persist = true } = {}) {
+  if (quitting) return { ok: false, error: 'quit in progress' };
+
+  if (backend.type === 'managed') {
+    currentBackend = backend;
+    if (persist) saveBackendConfig(app.getPath('userData'), backend);
+    await startManaged();
+    return { ok: true };
+  }
+
+  if (backend.type === 'attach') {
+    trace(`attach:probe-start ${backend.url}`);
+    await showPage(loadingHtml(`正在连接 ${backend.url}…`));
+    const probe = await classifyBackendUrl(backend.url);
+    trace(`attach:probe ${probe.kind} ${probe.detail || ''}`);
+    if (probe.kind !== 'dsh') {
+      const why =
+        probe.kind === 'gateway'
+          ? '这个地址是认证网关（远程模式尚未实现）'
+          : probe.kind === 'unreachable'
+            ? `无法连接：${probe.detail || '目标不可达'}`
+            : '目标不是 dsh 服务';
+      showPage(startupErrorHtml('无法连接后端', `${backend.url}\n${why}`));
+      return { ok: false, error: why };
+    }
+    currentBackend = { type: 'attach', url: probe.origin };
+    if (persist) saveBackendConfig(app.getPath('userData'), currentBackend);
+    if (dsh && dsh.running) await dsh.stop();
+    dshOrigin = probe.origin;
+    trace(`attach:loadURL ${probe.origin}`);
+    if (mainWindow) mainWindow.loadURL(probe.origin + '/');
+    return { ok: true };
+  }
+
+  const error = `后端类型 ${backend.type} 尚未实现`;
+  showPage(startupErrorHtml('无法连接后端', error));
+  return { ok: false, error };
+}
+
+async function startManaged() {
   dshRuntime = resolveDshRuntime({
     override: process.env.DSH_DESKTOP_DSH_BIN,
     bundledDir: process.env.DSH_DESKTOP_BUNDLED_DIR || process.resourcesPath,
@@ -298,6 +363,10 @@ function onUnexpectedExit(info) {
 
 async function retryBackend() {
   if (!mainWindow) return;
+  if (currentBackend.type !== 'managed') {
+    await applyBackend(currentBackend, { persist: false });
+    return;
+  }
   showPage(restartingHtml());
   try {
     const url = await spawnBackend();
@@ -312,9 +381,15 @@ async function retryBackend() {
 // window reloads, the app never exits.
 let restartingBackend = false;
 async function restartBackend() {
-  if (restartingBackend || quitting || !dshRuntime) return;
+  if (restartingBackend || quitting) return;
   restartingBackend = true;
   try {
+    if (currentBackend.type !== 'managed') {
+      // Attached targets are not ours to restart — reconnect instead.
+      await applyBackend(currentBackend, { persist: false });
+      return;
+    }
+    if (!dshRuntime) return;
     showPage(restartingHtml());
     if (dsh && dsh.running) await dsh.stop();
     const url = await spawnBackend();
@@ -355,6 +430,7 @@ function createShellWindow() {
       event.preventDefault();
       const action = target.slice(ACTION_SCHEME.length);
       if (action === 'retry') retryBackend();
+      else if (action === 'picker') openBackendPickerWindow(mainWindow);
       else if (action === 'quit') app.quit();
       return;
     }
@@ -366,6 +442,12 @@ function createShellWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+  });
+  mainWindow.webContents.on('did-finish-load', () => {
+    trace(`nav:finish ${mainWindow?.webContents.getURL().slice(0, 80)}`);
+  });
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc, failedUrl) => {
+    trace(`nav:fail ${code} ${desc} ${String(failedUrl).slice(0, 80)}`);
   });
 
   if (SMOKE) {
@@ -394,8 +476,13 @@ function navigateToDsh(url) {
   mainWindow.loadURL(url);
 }
 
+// Resolves when the page actually finished loading — callers that navigate
+// again right away must await it, or the aborted half-loaded data: page
+// confuses devtools-protocol clients tracking the window (seen as Playwright
+// losing the window entirely on fast attach flows).
 function showPage(html) {
-  if (mainWindow) mainWindow.loadURL(toDataUrl(html));
+  if (!mainWindow) return Promise.resolve();
+  return mainWindow.loadURL(toDataUrl(html)).catch(() => {});
 }
 
 function startupError(title, message) {

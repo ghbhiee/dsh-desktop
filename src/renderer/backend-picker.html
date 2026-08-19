@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>连接后端</title>
+<style>
+  body { font: 14px/1.6 -apple-system, system-ui, sans-serif; margin: 0;
+         background: #1e1e1e; color: #ddd; }
+  main { padding: 1.25rem 1.5rem; }
+  h1 { font-size: 1.1rem; margin: 0 0 1rem; }
+  .option { display: block; padding: .6rem .8rem; border: 1px solid #333; border-radius: 8px;
+            margin: .5rem 0; cursor: pointer; }
+  .option:hover { border-color: #4a7dff; }
+  .option input { margin-right: .6rem; }
+  .meta { color: #789; font-size: .8rem; margin-left: 1.6rem; }
+  input#custom { width: 100%; box-sizing: border-box; margin-top: .4rem; padding: .45rem .6rem;
+                 border-radius: 6px; border: 1px solid #444; background: #141414; color: #eee; }
+  input#custom:focus { outline: none; border-color: #4a7dff; }
+  button { padding: .5rem 1.2rem; border: none; border-radius: 6px; cursor: pointer;
+           background: #4a7dff; color: #fff; font-size: .9rem; margin-top: .8rem; }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { color: #9ab; font-size: .85rem; margin-top: .6rem; white-space: pre-wrap; }
+  #status.err { color: #d88; }
+  .badge { font-size: .75rem; border-radius: 4px; padding: .05rem .4rem; margin-left: .5rem; }
+  .badge.dsh { background: #234; color: #8bc; }
+  .badge.gateway { background: #432; color: #cb8; }
+  .badge.bad { background: #422; color: #c88; }
+</style>
+</head>
+<body>
+<main>
+  <h1>连接后端</h1>
+
+  <label class="option">
+    <input type="radio" name="backend" value="managed" id="managed">
+    <strong>应用托管的 dsh</strong>（默认）
+    <span class="meta">应用自己启动并管理 dsh 进程（内置或本机全局安装）</span>
+  </label>
+
+  <div id="detected"></div>
+
+  <label class="option">
+    <input type="radio" name="backend" value="custom" id="customRadio">
+    <strong>自定义地址</strong>
+    <span class="meta">本地或远程 dsh / 认证网关地址</span>
+    <input id="custom" placeholder="http://127.0.0.1:3080 或 https://ds.tokencv.com" spellcheck="false">
+    <span id="customKind"></span>
+  </label>
+
+  <button id="connect">连接</button>
+  <p id="status">加载中…</p>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  function optionHtml(entry) {
+    const label = document.createElement('label');
+    label.className = 'option';
+    label.innerHTML = `<input type="radio" name="backend" value="attach:${entry.url}">
+      <strong>本地 dsh</strong><span class="badge dsh">dsh</span>
+      <span class="meta">${entry.url}（pid ${entry.pid}）</span>`;
+    return label;
+  }
+
+  async function refresh() {
+    const state = await backendAPI.state();
+    const detected = $('detected');
+    detected.innerHTML = '';
+    for (const entry of state.detected) detected.append(optionHtml(entry));
+
+    if (state.current.type === 'managed') $('managed').checked = true;
+    else {
+      const radio = document.querySelector(`input[value="attach:${state.current.url}"]`);
+      if (radio) radio.checked = true;
+      else {
+        $('customRadio').checked = true;
+        $('custom').value = state.current.url;
+      }
+    }
+    $('status').textContent = state.detected.length
+      ? `检测到 ${state.detected.length} 个本地 dsh 实例。`
+      : '未检测到其它本地 dsh 实例。';
+  }
+
+  let probeTimer;
+  $('custom').addEventListener('input', () => {
+    $('customRadio').checked = true;
+    clearTimeout(probeTimer);
+    probeTimer = setTimeout(async () => {
+      const url = $('custom').value.trim();
+      if (!url) return ($('customKind').textContent = '');
+      const probe = await backendAPI.probe(url);
+      const badge = { dsh: ['dsh', 'dsh 服务'], gateway: ['gateway', '认证网关'] }[probe.kind];
+      $('customKind').innerHTML = '';
+      const span = document.createElement('span');
+      span.className = 'badge ' + (badge ? badge[0] : 'bad');
+      span.textContent = badge ? badge[1] : probe.kind === 'unreachable' ? '不可达' : '无法识别';
+      $('customKind').append(span);
+    }, 350);
+  });
+
+  $('connect').addEventListener('click', async () => {
+    const picked = document.querySelector('input[name="backend"]:checked');
+    if (!picked) return;
+    let backend;
+    if (picked.value === 'managed') backend = { type: 'managed' };
+    else if (picked.value === 'custom') {
+      const url = $('custom').value.trim();
+      if (!url) return;
+      backend = { type: 'attach', url };
+    } else backend = { type: 'attach', url: picked.value.slice('attach:'.length) };
+
+    $('connect').disabled = true;
+    $('status').className = '';
+    $('status').textContent = '连接中…';
+    try {
+      const result = await backendAPI.connect(backend);
+      if (result.ok) {
+        $('status').textContent = '已连接。';
+      } else {
+        $('status').className = 'err';
+        $('status').textContent = `连接失败：${result.error}`;
+      }
+    } finally {
+      $('connect').disabled = false;
+    }
+  });
+
+  refresh();
+</script>
+</body>
+</html>

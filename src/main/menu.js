@@ -6,11 +6,21 @@
 
 const REPO_URL = 'https://github.com/ghbhiee/dsh-desktop';
 
-function buildMenuTemplate({ openExternal, onManagePlugins, onRestartBackend }) {
+function buildMenuTemplate({ openExternal, onManagePlugins, onRestartBackend, onBackendPicker }) {
   return [
     { role: 'appMenu' },
     { role: 'fileMenu' },
     { role: 'editMenu' },
+    {
+      label: 'Backend',
+      submenu: [
+        {
+          id: 'backend-picker',
+          label: 'Connect to Backend…',
+          click: () => onBackendPicker?.(),
+        },
+      ],
+    },
     {
       label: 'Plugins',
       submenu: [

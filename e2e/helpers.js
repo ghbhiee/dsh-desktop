@@ -99,4 +99,35 @@ async function launchApp({ env = {}, toUi = true, uiTimeout = 90_000 } = {}) {
   return { app, win };
 }
 
-module.exports = { dshPids, clearGreetingDialogs, launchApp, cleanupLaunched, E2E_USERDATA };
+// Cross-process navigations (the app's data: status pages → an http origin)
+// can desync a previously-captured Page handle: the app navigates fine, but
+// the old handle's url() never updates. Resolve the CURRENT page by URL
+// across all of the app's windows instead of trusting a stale handle.
+async function windowAt(app, urlPattern, { timeoutMs = 60_000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    for (const page of app.windows()) {
+      try {
+        if (urlPattern.test(page.url())) return page;
+      } catch {}
+    }
+    if (Date.now() > deadline) {
+      const urls = app.windows().map((page) => page.url().slice(0, 90));
+      const trace = await app.evaluate(() => global.__backendTrace).catch(() => null);
+      throw new Error(
+        `no window matching ${urlPattern} within ${timeoutMs}ms.\n` +
+          `windows: ${JSON.stringify(urls, null, 1)}\ntrace: ${JSON.stringify(trace, null, 1)}`
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+}
+
+module.exports = {
+  dshPids,
+  clearGreetingDialogs,
+  launchApp,
+  cleanupLaunched,
+  windowAt,
+  E2E_USERDATA,
+};

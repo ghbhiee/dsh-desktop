@@ -63,14 +63,16 @@ function loadingHtml(message) {
   return pageShell('dsh-desktop', `<h1>${escapeHtml(message)}</h1>`);
 }
 
-// Startup problems the user must fix (dsh missing, dsh too old): explain,
-// offer only Quit.
+// Startup problems the user must fix (dsh missing, dsh too old, a backend
+// that will not connect): explain, offer the backend picker and Quit.
 function startupErrorHtml(title, message) {
   return pageShell(
     title,
     `<h1>${escapeHtml(title)}</h1>
      <pre>${escapeHtml(message)}</pre>
-     <p><a class="button secondary" href="${ACTION_SCHEME}quit">Quit</a></p>`
+     <p><a class="button" href="${ACTION_SCHEME}retry">重试</a>
+        <a class="button" href="${ACTION_SCHEME}picker">切换后端…</a>
+        <a class="button secondary" href="${ACTION_SCHEME}quit">退出</a></p>`
   );
 }
 
