@@ -143,6 +143,43 @@ preference:
 
 Do not design around an assumption here. Verify, then pick, then tell the user.
 
+## Status — all milestones landed (2026-08-19)
+
+Every milestone below is built and mechanically verified: **76 unit tests**
+(`npm test`, over the pure modules) and **14 e2e** (`npm run e2e`, Playwright
+driving the real app — including the packaged `.app` and a fake gateway).
+Repo: <https://github.com/ghbhiee/dsh-desktop>. Read the milestone sections
+for the *reasoning*; this section is what actually exists now.
+
+What the app grew beyond the original brief, all of it on the user's later
+request:
+
+- **Backend picker** (`Backend → Connect to Backend…`). Four backends, one
+  window: bundled dsh, system dsh, **attach** to an already-running local dsh
+  (found by reading the process table), and **remote** through the gateway.
+  The choice persists; a typed address is classified by probing it —
+  `__DSH_BOOT__` in the body means dsh, a 302 to a `/auth` page titled
+  DeepSeek Harness means gateway.
+- **Plugin manager** (`Plugins → Manage Plugins…`). Installs from a local
+  path, a GitHub URL, `owner/repo`, or a bare name; shows the equivalent
+  terminal command to copy; **hot-restarts dsh in place** on success, so the
+  window never goes away. Disabled while attached to someone else's dsh.
+- **Remote pairing** — the answer to the WebAuthn question below. The passkey
+  ceremony runs in the system browser; the login page (opened with `?pair=1`)
+  shows a one-time code the app swaps for its own session cookie, persisted so
+  relaunches reconnect silently. Needs the gateway's `/auth/pair/{code,claim}`
+  endpoints — **already deployed on server 15 (`ds.tokencv.com`)**; see that
+  repo's HANDOFF for the deployment and its STATE_DIR trap.
+- **Per-profile port memory** (`preferred-ports.json` in `DSH_HOME`). dsh
+  still takes an OS-assigned port on first boot, but the app reuses it after,
+  so the origin — and the web UI's origin-keyed localStorage — survives a
+  restart. A taken port falls back to `--port 0`.
+- **DeepSeek icon**, built from dsh's own `favicon.svg`.
+
+Only one check still needs a human: **M5's real Touch ID round trip**
+(everything around it is verified against the live gateway — detection,
+browser hand-off, pairing page, real-gateway rejection of a bogus code).
+
 ## Milestones
 
 Each is independently useful and ends in a runnable check. Do not start the next
@@ -230,8 +267,8 @@ uncommitted in one place while another session built on top of it.
 
 **Commit and push as soon as a change is finished.** Begin a session with
 `git pull` (or at least `git status && git log --oneline -3`); never assume the
-working tree is what git has. First task of the first session: create
-`ghbhiee/dsh-desktop` and push, so a remote exists to be the source of truth.
+working tree is what git has. The remote exists:
+<https://github.com/ghbhiee/dsh-desktop> (public).
 
 ## Guardrails
 
@@ -250,11 +287,32 @@ working tree is what git has. First task of the first session: create
   gateway to make the app easier, and raise any gateway change with the user
   before writing it.
 
-## Still to decide with the user
+## Decided (was: still to decide)
 
-- Which modes ship first, and is mode A (bundling ~500 MB) actually wanted, or
-  is "install dsh yourself" acceptable?
-- Dedicated `desktop` profile (recommended) vs sharing `web`?
-- Tray icon / launch at login / global hotkey — in or out?
-- Should one window switch between local and remote, or is each a separate
-  window/app instance?
+- **Ship mode A.** Bundling is wanted; the packaged `.app` is ~600 MB / 171 MB
+  as a DMG. A packaged build always prefers its own dsh over a global one.
+- **Dedicated `desktop` profile**, under an app-owned `DSH_HOME` in userData.
+  `~/.dsh` and the launchd `web` profile are never touched.
+- **One window switches between backends** — the picker replaces what the
+  window points at rather than opening a second instance.
+- Tray icon / launch at login / global hotkey: still open, nobody has asked.
+
+## Known sharp edges
+
+- **Dev and packaged builds share one userData directory** (Electron derives
+  it from `package.json`'s `name`), so on a development machine the packaged
+  app reuses the dev profile — including plugins installed as pnpm `link:`
+  symlinks into `~/dsh/dsh-plugin-*`. Harmless here, wrong for a distributed
+  build: give the packaged flavour its own name if that ever matters.
+- **e2e must not collide with a running instance.** Tests set
+  `DSH_DESKTOP_USERDATA` (own single-instance lock, own state), filter process
+  sweeps by the `DSH_DESKTOP_E2E=1` marker so they never count or kill the
+  user's own dsh, and create windows hidden so they cannot steal keyboard
+  focus mid-run. All three were learned the hard way.
+- **dsh hard-fails the whole boot** if a `bundles` row names a package with no
+  non-empty `dsh.bundle`. The plugin manager therefore filters what it unions
+  into the stack; a package that installs but declares nothing gets a warning,
+  not a bricked profile.
+- **`showPage()` must be awaited** before navigating again. An aborted
+  half-loaded `data:` page desyncs devtools-protocol clients — Playwright lost
+  the window entirely on fast attach flows until this was fixed.
