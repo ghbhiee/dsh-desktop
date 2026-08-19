@@ -21,6 +21,7 @@ const PAIR_CODE = 'TESTCODE';
 
 function startFakeGateway() {
   let pairCodeUsed = false;
+  const state = { revoked: false };
   const hits = { auth: 0, claim: 0, app: 0 };
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://x');
@@ -55,7 +56,7 @@ function startFakeGateway() {
       });
       return;
     }
-    if (cookie.includes(`dsh_auth=${GOOD_COOKIE}`)) {
+    if (!state.revoked && cookie.includes(`dsh_auth=${GOOD_COOKIE}`)) {
       hits.app += 1;
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end('<script>window.__DSH_BOOT__={}</script><h1 id="fake-dsh">dsh behind gateway</h1>');
@@ -65,7 +66,7 @@ function startFakeGateway() {
   });
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => {
-      resolve({ server, origin: `http://127.0.0.1:${server.address().port}`, hits });
+      resolve({ server, origin: `http://127.0.0.1:${server.address().port}`, hits, state });
     });
   });
 }
@@ -120,6 +121,21 @@ test('remote：网关检测 → 浏览器认证 → 配对码换会话 → 重�
     expect(opens).toEqual([]);
     expect(gateway.hits.claim).toBe(claimsBefore);
     await second.app.close();
+
+    // Revoke the session server-side (as `dsh-approve` would), then relaunch:
+    // the stored cookie is now dead, so the app must land on the pairing page
+    // and re-open the browser — not hang or show a blank window. This is the
+    // HANDOFF M5 check: "a revoked session lands on the login page, not a hang."
+    gateway.state.revoked = true;
+    const third = await launchApp({ env: { DSH_DESKTOP_USERDATA: userdata }, toUi: false });
+    const rePairPage = await windowAt(third.app, /^data:.*%E9%85%8D%E5%AF%B9/, {
+      timeoutMs: 30_000,
+    });
+    await expect(rePairPage.locator('input[name=code]')).toBeVisible({ timeout: 10_000 });
+    await expect
+      .poll(() => third.app.evaluate(() => global.__externalOpens || []), { timeout: 10_000 })
+      .toContain(`${gateway.origin}/auth?pair=1`);
+    await third.app.close();
   } finally {
     gateway.server.close();
     fs.rmSync(userdata, { recursive: true, force: true });
