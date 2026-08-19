@@ -107,7 +107,9 @@
     else if (picked.value === 'custom') {
       const url = $('custom').value.trim();
       if (!url) return;
-      backend = { type: 'attach', url };
+      // remote covers both cases: a bare dsh gets attached directly, a
+      // gateway starts the browser pairing flow.
+      backend = { type: 'remote', url };
     } else backend = { type: 'attach', url: picked.value.slice('attach:'.length) };
 
     $('connect').disabled = true;

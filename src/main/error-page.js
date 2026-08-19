@@ -76,6 +76,31 @@ function startupErrorHtml(title, message) {
   );
 }
 
+// Remote pairing: the passkey ceremony happens in the system browser; this
+// page collects the one-time code it displays. The form submits as a GET to
+// the sentinel origin, so the code arrives through will-navigate like every
+// other action — the sandboxed page needs no preload and no IPC.
+function pairingHtml(origin, { error } = {}) {
+  return pageShell(
+    '连接远程 dsh',
+    `<h1>在浏览器中完成认证</h1>
+     <p>已在系统浏览器打开 <strong>${escapeHtml(origin)}</strong> 的登录页。<br>
+        用 Passkey（Touch&nbsp;ID）登录后，页面会显示一个<strong>配对码</strong>，填到下面：</p>
+     ${error ? `<p style="color:#d88">${escapeHtml(error)}</p>` : ''}
+     <form action="${ACTION_SCHEME}pair" method="get">
+       <input name="code" autofocus autocomplete="off" spellcheck="false"
+              style="font: 1.1rem ui-monospace, monospace; letter-spacing: .15em;
+                     padding: .5rem .8rem; border-radius: 6px; border: 1px solid #444;
+                     background: #111; color: #eee; width: 14rem; text-transform: uppercase;">
+       <button class="button" style="border: none; cursor: pointer; font-size: 1rem;">配对</button>
+     </form>
+     <p style="margin-top:1.2rem">
+       <a class="button secondary" href="${ACTION_SCHEME}reauth">重新打开登录页</a>
+       <a class="button secondary" href="${ACTION_SCHEME}picker">切换后端…</a>
+     </p>`
+  );
+}
+
 function toDataUrl(html) {
   return 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
 }
@@ -85,6 +110,7 @@ module.exports = {
   restartingHtml,
   loadingHtml,
   startupErrorHtml,
+  pairingHtml,
   toDataUrl,
   escapeHtml,
   ACTION_SCHEME,
