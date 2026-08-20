@@ -2,8 +2,10 @@
 'use strict';
 
 // Build step for mode A: stage everything the packaged app ships beside its
-// own code (electron-builder extraResources copies build/bundle/* into
-// Contents/Resources).
+// own code. bin/after-pack.js then copies build/bundle/* into the app's
+// Contents/Resources — electron-builder's own extraResources cannot, its
+// filter machinery silently drops node_modules and the dsh tree is mostly
+// node_modules.
 //
 //   build/bundle/dsh/               the dsh package tree, rsynced from this
 //                                   machine's global install (~306 MB; keeps
